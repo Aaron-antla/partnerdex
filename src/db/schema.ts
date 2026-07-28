@@ -1,0 +1,243 @@
+/**
+ * The SQLite schema, applied idempotently on every open.
+ *
+ * Four roles, one file (the Partner API's volume comfortably fits SQLite):
+ *   1. raw feeds        — `app_events`, `transactions` as returned by the API
+ *   2. derived indexes  — `subscriptions`, `install_intervals`, normalized at
+ *                         write time so read-time math is sums + date compares
+ *   3. operational      — `sync_state`, `metric_cache`, `drift_snapshots`
+ *   4. notifications    — `notification_channels` and the two tables that decide
+ *                         what has already been said, and to whom
+ *
+ * Roles 1 and 2 are disposable: both are rebuilt from the API on demand. Role 4
+ * is the only place in this store holding state that cannot be recovered by
+ * re-syncing, which is why its tables are written to rather than rebuilt.
+ *
+ * Every timestamp column holds a canonical UTC ISO-8601 string, so lexical
+ * comparison is chronological comparison and the as-of predicate is plain SQL.
+ */
+export const SCHEMA_SQL = `
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS apps (
+  id             TEXT PRIMARY KEY,
+  name           TEXT NOT NULL,
+  api_key        TEXT,
+  discovered_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS shops (
+  id                TEXT PRIMARY KEY,
+  name              TEXT,
+  myshopify_domain  TEXT
+);
+
+-- Raw app lifecycle events. The Partner API does not expose an event id, so the
+-- natural key below is what makes re-syncing idempotent. Empty strings rather
+-- than NULLs because SQLite treats NULLs as distinct inside a UNIQUE index.
+CREATE TABLE IF NOT EXISTS app_events (
+  app_id          TEXT NOT NULL,
+  shop_id         TEXT NOT NULL DEFAULT '',
+  type            TEXT NOT NULL,
+  occurred_at     TEXT NOT NULL,
+  charge_id       TEXT NOT NULL DEFAULT '',
+  charge_name     TEXT,
+  charge_amount   REAL,
+  charge_currency TEXT,
+  charge_test     INTEGER NOT NULL DEFAULT 0,
+  billing_on      TEXT,
+  PRIMARY KEY (app_id, type, occurred_at, charge_id, shop_id)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_events_charge ON app_events (charge_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_events_app_shop ON app_events (app_id, shop_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_events_type_time ON app_events (type, occurred_at);
+
+CREATE TABLE IF NOT EXISTS transactions (
+  id               TEXT PRIMARY KEY,
+  type             TEXT NOT NULL,
+  app_id           TEXT NOT NULL,
+  shop_id          TEXT NOT NULL DEFAULT '',
+  charge_id        TEXT NOT NULL DEFAULT '',
+  -- Numeric tail of charge_id. Transactions and app events sometimes label the
+  -- same recurring charge with different gid prefixes, so joins use this.
+  charge_ref       TEXT NOT NULL DEFAULT '',
+  created_at       TEXT NOT NULL,
+  billing_interval TEXT,
+  gross_amount     REAL NOT NULL DEFAULT 0,
+  net_amount       REAL NOT NULL DEFAULT 0,
+  shopify_fee      REAL NOT NULL DEFAULT 0,
+  currency         TEXT NOT NULL DEFAULT ''
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_tx_app_time ON transactions (app_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_tx_charge ON transactions (charge_ref, type, created_at);
+CREATE INDEX IF NOT EXISTS idx_tx_type_time ON transactions (type, created_at);
+CREATE INDEX IF NOT EXISTS idx_tx_shop_time ON transactions (app_id, shop_id, created_at);
+
+-- One row per subscription charge, rebuilt from app_events + transactions.
+-- monthly_amount is the write-time normalized figure that MRR sums.
+CREATE TABLE IF NOT EXISTS subscriptions (
+  charge_id         TEXT PRIMARY KEY,
+  charge_ref        TEXT NOT NULL DEFAULT '',
+  app_id            TEXT NOT NULL,
+  shop_id           TEXT NOT NULL DEFAULT '',
+  plan_name         TEXT,
+  amount            REAL NOT NULL DEFAULT 0,
+  currency          TEXT,
+  billing_interval  TEXT NOT NULL DEFAULT 'EVERY_30_DAYS',
+  monthly_amount    REAL NOT NULL DEFAULT 0,
+  is_test           INTEGER NOT NULL DEFAULT 0,
+  accepted_at       TEXT,
+  activated_at      TEXT,
+  conversion_at     TEXT,
+  churn_at          TEXT,
+  churn_reason      TEXT,
+  frozen_at         TEXT,
+  unfrozen_at       TEXT,
+  trial_started_at  TEXT,
+  trial_ends_at     TEXT,
+  trial_status      TEXT NOT NULL DEFAULT 'none',
+  is_plan_change    INTEGER NOT NULL DEFAULT 0,
+  paid_sale_count   INTEGER NOT NULL DEFAULT 0,
+  first_sale_at     TEXT,
+  last_sale_at      TEXT
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_subs_app ON subscriptions (app_id, is_test);
+CREATE INDEX IF NOT EXISTS idx_subs_ref ON subscriptions (charge_ref);
+CREATE INDEX IF NOT EXISTS idx_subs_conversion ON subscriptions (conversion_at);
+CREATE INDEX IF NOT EXISTS idx_subs_churn ON subscriptions (churn_at);
+CREATE INDEX IF NOT EXISTS idx_subs_shop ON subscriptions (app_id, shop_id);
+CREATE INDEX IF NOT EXISTS idx_subs_trial ON subscriptions (trial_status, trial_started_at);
+
+-- Install lifecycle collapsed into half-open intervals [started_at, ended_at).
+-- An install is live as-of D iff some interval covers D, which keeps the
+-- active-installs query a plain range predicate instead of a per-shop scan.
+CREATE TABLE IF NOT EXISTS install_intervals (
+  app_id     TEXT NOT NULL,
+  shop_id    TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at   TEXT,
+  PRIMARY KEY (app_id, shop_id, started_at)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_installs_span ON install_intervals (started_at, ended_at);
+
+-- Clean customer lifecycle events, compiled from the raw feeds by the state
+-- machine in sync/events.ts. The raw layer above stays verbatim; this is the
+-- derived layer analytics and the Customers page read.
+--
+-- \`event_id\` is deterministic — the same raw fact always compiles to the same
+-- id — so a full rebuild converges instead of accumulating duplicates.
+--
+-- \`suppressed\` is the cancel trap's soft delete: a cancellation that turned out
+-- to be half of a plan change stays on the record but is filtered out of every
+-- default read, so churn is never double-counted and the audit trail survives.
+CREATE TABLE IF NOT EXISTS customer_events (
+  event_id         TEXT PRIMARY KEY,
+  app_id           TEXT NOT NULL,
+  shop_id          TEXT NOT NULL,
+  type             TEXT NOT NULL,
+  occurred_at      TEXT NOT NULL,
+  charge_id        TEXT NOT NULL DEFAULT '',
+  -- The subscription this install was on before this event, when it moved
+  -- between subscriptions. Correlates the two halves of a plan change.
+  prev_charge_id   TEXT NOT NULL DEFAULT '',
+  plan_name        TEXT,
+  -- The normalized monthly price in effect after this event.
+  plan_amount      REAL,
+  billing_interval TEXT,
+  currency         TEXT,
+  -- Signed monthly MRR delta, gated on the same instant MRR is gated on (the
+  -- first paid charge). NULL on events that do not move money.
+  net_change       REAL,
+  -- Cash actually moved, for payments and refunds. NULL elsewhere.
+  amount           REAL,
+  suppressed       INTEGER NOT NULL DEFAULT 0,
+  detail           TEXT
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_cevents_shop ON customer_events (shop_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_cevents_app_shop ON customer_events (app_id, shop_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_cevents_type_time ON customer_events (type, occurred_at, suppressed);
+CREATE INDEX IF NOT EXISTS idx_cevents_charge ON customer_events (charge_id);
+
+-- Where notifications are sent. One row per Slack incoming webhook.
+--
+-- The URL is the credential: anyone holding it can post into the channel, so it
+-- is write-only over the API — the dashboard sends one and never reads one back.
+CREATE TABLE IF NOT EXISTS notification_channels (
+  id               TEXT PRIMARY KEY,
+  name             TEXT NOT NULL,
+  webhook_url      TEXT NOT NULL,
+  created_at       TEXT NOT NULL,
+  last_delivery_at TEXT,
+  last_error       TEXT,
+  last_error_at    TEXT
+) WITHOUT ROWID;
+
+-- Which topics a channel wants. Presence of the row is the "on" state, so
+-- turning a toggle off leaves nothing behind to go stale.
+--
+-- \`enabled_at\` is also the watermark. Events are compiled from the whole
+-- Partner API history, so without one, switching a toggle on would replay years
+-- of subscriptions into a Slack channel. Only what happens *after* you asked is
+-- news, and re-enabling deliberately restarts the clock rather than filling in
+-- the silence.
+CREATE TABLE IF NOT EXISTS notification_subscriptions (
+  channel_id TEXT NOT NULL REFERENCES notification_channels (id) ON DELETE CASCADE,
+  topic      TEXT NOT NULL,
+  enabled_at TEXT NOT NULL,
+  PRIMARY KEY (channel_id, topic)
+) WITHOUT ROWID;
+
+-- The delivery ledger, and the reason a merchant is never told twice.
+--
+-- \`customer_events\` is rebuilt wholesale on every sync, so "new since last
+-- time" cannot be read from that table — every row is new every time. What
+-- survives a rebuild is the event id, which is deterministic, so recording the
+-- ids already sent is what makes an at-most-once guarantee out of a table that
+-- is dropped and rewritten every five minutes.
+--
+-- A row is written for a permanent failure too (\`ok = 0\`): a webhook Slack has
+-- revoked will never accept this event, and retrying it every sync forever would
+-- bury the events that can still be delivered. Transient failures write nothing
+-- and are retried on the next run.
+CREATE TABLE IF NOT EXISTS notification_deliveries (
+  channel_id   TEXT NOT NULL REFERENCES notification_channels (id) ON DELETE CASCADE,
+  event_id     TEXT NOT NULL,
+  delivered_at TEXT NOT NULL,
+  ok           INTEGER NOT NULL DEFAULT 1,
+  error        TEXT,
+  PRIMARY KEY (channel_id, event_id)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_deliveries_at ON notification_deliveries (delivered_at);
+
+CREATE TABLE IF NOT EXISTS sync_state (
+  key            TEXT PRIMARY KEY,
+  cursor         TEXT,
+  synced_through TEXT,
+  updated_at     TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS metric_cache (
+  key        TEXT PRIMARY KEY,
+  payload    TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_cache_expiry ON metric_cache (expires_at);
+
+-- Point-in-time copies of past time series, so a later run can prove that
+-- history did not silently move underneath us.
+CREATE TABLE IF NOT EXISTS drift_snapshots (
+  metric      TEXT NOT NULL,
+  captured_at TEXT NOT NULL,
+  bucket_date TEXT NOT NULL,
+  value       REAL NOT NULL,
+  PRIMARY KEY (metric, captured_at, bucket_date)
+) WITHOUT ROWID;
+`;
