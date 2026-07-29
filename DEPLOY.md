@@ -1,181 +1,118 @@
-# Deploying partnerdex to Fly.io
+# Deploying PartnerDex
 
-PartnerDex is a single Node process: an Express server that serves the API and
-the built dashboard, plus a background sync loop, over a local SQLite file. That
-shape decides the whole deployment — **one machine, one volume, always on**. The
-volume attaches to a single machine, and a second machine would run a second
-sync loop against its own copy of the database.
+This guide outlines the production deployment process for PartnerDex.
 
-Files this depends on, all in the repo root: `Dockerfile`, `.dockerignore`, and
-`fly.toml` — which is **gitignored**. `fly.example.toml` is the committed
-template; `fly.toml` is yours, holding the real app name, region, and org id.
+---
 
-That split has one consequence worth knowing up front: `fly deploy` reads
-`fly.toml` and a fresh clone will not have one. Anyone deploying — including CI —
-has to copy the template and fill it in first, or pass `fly deploy --config`
-explicitly.
+## 1. How the project is designed to run and deploy
 
-## 0. Prerequisites
+PartnerDex is designed as a single, lightweight Node.js process. It runs an Express server serving both the REST API and the compiled frontend dashboard, accompanied by a background synchronization loop that queries the Shopify Partner API.
 
-Install flyctl and log in:
+### Infrastructure Architecture
+- **Single Instance:** PartnerDex must run on a **single instance** (one container/machine) with a persistent volume attached. Because it uses an embedded, local SQLite database, deploying multiple nodes would result in data inconsistency and conflicting background sync workers.
+- **Persistent Volume:** A persistent disk volume must be mounted at `/data` to store the SQLite database. Without persistent storage, redeploying or restarting the container would cause data loss and trigger a complete historical backfill.
+- **Docker-Ready:** The codebase includes a `Dockerfile` and a `.dockerignore` file. The container is multi-staged, building the server and web frontend using TypeScript and Vite, and exporting a clean, runtime-only image without build tools.
 
-```bash
-brew install flyctl && fly auth login
-```
+---
 
-You also need a Partner API client from **Partners Dashboard → Settings →
-Partner API clients**, with the *View financials* and *Manage apps* permissions.
+## 2. Steps to deploy on fly.io
 
-## 1. Create your fly.toml
+PartnerDex is pre-configured for deployment on Fly.io using the template `fly.example.toml`.
 
-```bash
-cp fly.example.toml fly.toml
-```
+### Step 2.1. Prerequisites
+1. Install `flyctl` and authenticate with your Fly.io account:
+   ```bash
+   brew install flyctl
+   fly auth login
+   ```
+2. Locate or create a Partner API client in your **Shopify Partners Dashboard → Settings → Partner API clients**. Ensure the client has both **View financials** and **Manage apps** permissions.
 
-Fill in `app`, `primary_region`, and `PARTNER_ORGANIZATION_ID` (the number in
-your Partners Dashboard URL). `fly platform regions` lists the regions.
+### Step 2.2. Create your configuration
+1. Copy the configuration template to create your production `fly.toml` file (which is gitignored by default):
+   ```bash
+   cp fly.example.toml fly.toml
+   ```
+2. Open `fly.toml` and configure the following:
+   - `app`: Set your unique Fly app name.
+   - `primary_region`: Set the target deployment region.
+   - Under `[env]`, set `PARTNER_ORGANIZATION_ID` to your Shopify Organization ID (found in the Partners Dashboard URL: `partners.shopify.com/<id>/...`).
 
-Do not run `fly launch` — it rewrites `fly.toml` from its own scan of the repo
-and would drop the volume mount, the health check, and the single-machine
-settings. Create the app directly:
+3. Initialize the Fly application:
+   ```bash
+   fly apps create <your-app-name>
+   ```
+   *Warning: Do not run `fly launch`. It will overwrite the customized template, dropping essential settings such as volume mounts and health checks.*
 
-```bash
-fly apps create <your-app-name>
-```
-
-When you add a setting later, add it to `fly.example.toml` too. The template is
-the only record of the config that survives a fresh clone.
-
-## 2. Create the volume
-
-The database lives on a volume mounted at `/data`. Without it, every deploy
-starts from an empty database and re-runs the full backfill.
-
+### Step 2.3. Create the persistent volume
+Create a 1 GB persistent volume in the same region as your application:
 ```bash
 fly volumes create partnerdex_data --size 1 --region <your-region> --yes
 ```
+The volume name `partnerdex_data` must match the `source` name under the `[mounts]` section in your `fly.toml`.
 
-The region must match `primary_region` in your `fly.toml`, or the machine will
-have no volume to attach to. 1 GB is generous — the database is a
-few MB per year of history for a typical org. The name must match `source` under
-`[mounts]` in `fly.toml`.
+### Step 2.4. Set production environment credentials
+Open your `fly.toml` and define your credentials directly within the `[env]` section:
+- `PARTNER_API_TOKEN`: Your Shopify Partner API token.
+- `DASHBOARD_PASSWORD`: Set a secure password (at least 8 characters) to restrict dashboard and API access.
 
-## 3. Fill in the credentials
+*Note: Since these credentials live in a gitignored `fly.toml` file, keep this file secure. If you lose `fly.toml`, you must rebuild your configuration.*
 
-Everything, credentials included, lives in `[env]` in `fly.toml` — there is no
-separate `fly secrets` step. Fill in the last two keys:
-
-```toml
-  PARTNER_API_TOKEN = "..."
-  DASHBOARD_PASSWORD = "..."
-```
-
-**`DASHBOARD_PASSWORD` is not optional here.** Left empty, PartnerDex runs with
-no login at all — the localhost default. On Fly the app is on the public
-internet, so an empty password means your revenue data is too. Use something
-long; 8 characters is the floor the config enforces, not a recommendation.
-
-Because the credentials sit in a plaintext file rather than Fly's encrypted
-store, three things are worth knowing:
-
-- The gitignore is the only thing keeping them out of the repo. `git add -f`,
-  a `git stash` you later push, an editor backup, or a `tar` of the directory
-  all route around it.
-- `fly config show` prints them, and so does the machine metadata that anyone
-  with access to the app can read.
-- `fly.toml` is now the only copy of your deploy config that is not in git.
-  Lose the file, lose the config — keep it somewhere you back up.
-
-To rotate a credential, edit `fly.toml` and redeploy. Changing
-`DASHBOARD_PASSWORD` signs everyone out, since the session cookie is derived
-from it.
-
-## 4. Deploy
-
+### Step 2.5. Deploy the application
+Deploy PartnerDex to Fly.io:
 ```bash
 fly deploy
 ```
 
-The Dockerfile builds the server with `tsc` and the dashboard with Vite, then
-resolves production dependencies in a separate stage so the runtime image has no
-compiler in it. `better-sqlite3` is a native module, which is why that stage
-installs `python3`/`make`/`g++` — it needs them whenever no prebuilt binary
-matches the platform.
-
-First boot starts with an empty database and begins backfilling from
-`SYNC_START_DATE`. Depending on how much history the org has, the dashboard may
-be sparse for the first few minutes. Watch it:
-
+On first startup, the server automatically initializes an empty SQLite database and starts backfilling historical records from `SYNC_START_DATE`. You can monitor the process by reading the logs:
 ```bash
 fly logs
 ```
 
-## 5. Seed the history (optional, for a large backfill)
-
-The background loop backfills on its own, but if you would rather run the first
-sync in the foreground and see it finish:
-
-```bash
-fly ssh console -C "node /app/dist/cli.js sync"
-```
-
-`doctor` and `validate` run the same way and are the first things to reach for
-if numbers look wrong:
-
-```bash
-fly ssh console -C "node /app/dist/cli.js doctor"
-```
-
-## 6. Verify
-
+### Step 2.6. Verify the deployment
+Verify that the application is running and accessible:
 ```bash
 curl https://<your-app-name>.fly.dev/api/health
 ```
+The health check endpoint is unprotected and returns `200 OK` when the server is healthy. To access reports, navigate to `https://<your-app-name>.fly.dev` in your browser and log in with your configured password.
 
-The health probe is deliberately outside the auth wall, which is what lets the
-Fly health check in `fly.toml` use it. Every other `/api` route needs the session
-cookie. Then open `https://<your-app-name>.fly.dev` and log in.
+---
 
-## Operating notes
+## 3. Details and configurations
 
-**Backups.** A Fly volume is a single disk, not a replicated store, and Fly's
-own snapshots are the only safety net configured here. To pull a copy down:
+### Foreground Backfill Seed (Optional)
+For larger Shopify accounts, the initial historical backfill might take some time. If you prefer to run the first sync manually in the foreground to monitor progress, execute:
+```bash
+fly ssh console -C "node /app/dist/cli.js sync"
+```
+You can also run internal diagnostics or validations on your production instance:
+```bash
+fly ssh console -C "node /app/dist/cli.js doctor"
+fly ssh console -C "node /app/dist/cli.js validate"
+```
 
+### Backups and Data Portability
+Since the SQLite database resides on a single physical disk, you should perform regular backups of the database file (`/data/partnerdex.db`). To download a local copy of your production database, run:
 ```bash
 fly ssh sftp get /data/partnerdex.db ./partnerdex-backup.db
 ```
 
-Do that on a schedule if the history matters to you. `fly volumes snapshots list
-<volume-id>` shows what Fly has retained.
+### Resilient Redeploys
+During deployments, the running container stops and restarts, which may interrupt an active sync loop. This is completely safe; PartnerDex's synchronization logic is fully incremental, re-reading records from a 3-day overlap window prior to the last known watermark to catch late-arriving events.
 
-**Redeploys.** The machine stops and restarts, which interrupts an in-flight
-sync. Nothing is corrupted — syncs are incremental and re-read a 3-day overlap
-behind the last watermark, so the next run picks the gap back up.
+### Background Worker Architecture
+To prevent CPU-intensive SQLite write operations from blocking the API and health-check HTTP thread, the sync worker runs as a separate forked child process. This pattern keeps the web server responsive and frees system memory back to the host OS when syncing finishes.
 
-**The sync runs in a child process.** `rebuildDerivedTables` is several seconds
-of synchronous SQLite work, and better-sqlite3 has no async mode, so running it
-in the server process froze every request — including `/api/health`, which made
-Fly report a healthy machine as down on every sync. It is forked instead (see
-`src/sync/worker.ts`), which keeps the request thread free and returns the
-sync's memory to the OS when the child exits.
+### Scaling & High Availability
+- **Do not scale horizontally (`count > 1`).** Adding multiple nodes will create separate persistent volumes, leading to isolated and unsynced SQLite databases, alongside duplicate calls to the Shopify API.
+- To scale for increased loads, scale vertically by upgrading the machine's CPU and Memory:
+  ```bash
+  fly scale vm shared-cpu-2x --memory 1024
+  ```
 
-**Scaling.** Don't. `fly scale count 2` would give the second machine its own
-volume, its own database, and its own sync loop hammering the Partner API. If
-you need more headroom, scale up (`fly scale vm shared-cpu-2x --memory 1024`),
-not out.
+### Cost and Auto-Stopping
+By default, Fly.io may stop inactive machines to save costs. However, because PartnerDex depends on its background worker to continuously sync Shopify API records, auto-stopping is disabled (`auto_stop_machines = false` in `fly.toml`). This ensures that the background sync continues to run every 5 minutes and dashboard metrics are kept up to date.
 
-**Cost.** One `shared-cpu-1x`/512MB machine that never auto-stops, plus 1 GB of
-volume. `auto_stop_machines = false` is intentional — a stopped machine runs no
-sync loop, so the data would go stale until someone loaded the page.
-
-**`TRUST_PROXY` is not optional on Fly.** Fly terminates TLS at its proxy and
-forwards plain HTTP, so without it Express reads `request.protocol` as `"http"`
-and issues the session cookie with no `Secure` flag, and `request.ip` is the
-proxy's address rather than the client's — which collapses the login lockout in
-[src/server/auth.ts](src/server/auth.ts) into a single shared bucket for the
-whole internet. `TRUST_PROXY = "true"` is already set in `fly.toml`.
-
-The inverse is just as important: leave it **off** whenever the port is reachable
-directly, as it is in local development. With nothing in front to overwrite them,
-`X-Forwarded-For` and `X-Forwarded-Proto` are whatever the client typed, and a
-forged IP per request walks straight around the lockout.
+### Reverse Proxy and Trust Proxy Configuration
+When deployed on Fly.io, TLS is terminated at Fly's edge proxy, which routes unencrypted plain HTTP requests to the container.
+- For secure cookie handling and accurate IP-based rate limiting (preventing brute force attempts on the dashboard login), the application relies on the `TRUST_PROXY = "true"` setting in `fly.toml`.
+- Leave `TRUST_PROXY` disabled during local development to prevent IP spoofing via mock headers.
