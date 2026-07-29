@@ -34,6 +34,12 @@ export interface SubscriptionNotice {
   previousBillingInterval: string | null;
   /** Set when a paid subscription opened with a free period. */
   trialEndsAt: string | null;
+  /**
+   * The event's own payload, parsed. A review event has no charge and no plan,
+   * so everything worth saying about it — the stars, the text, the link — comes
+   * from here.
+   */
+  detail: Record<string, unknown> | null;
 }
 
 export function formatMoney(amount: number | null, currency: string | null): string {
@@ -101,7 +107,142 @@ export interface SlackMessage {
   blocks: unknown[];
 }
 
+/** The longest excerpt of a review body a message carries before trailing off. */
+const REVIEW_EXCERPT_CHARS = 400;
+
+function stars(rating: number): string {
+  const whole = Math.max(0, Math.min(5, Math.round(rating)));
+  return '★'.repeat(whole) + '☆'.repeat(5 - whole);
+}
+
+function num(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function str(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+/**
+ * A review as a message.
+ *
+ * Split from the subscription renderer rather than bolted onto it because the
+ * two share almost nothing: there is no plan, no price and no MRR movement on a
+ * review, and rendering "Plan —, MRR No change" beside a one-star would be four
+ * lines of noise around the only line worth reading.
+ *
+ * The rating drives the emoji, which is the part a reader takes in before they
+ * have read anything: a one-star and a five-star arriving in the same channel
+ * must not look alike at a glance.
+ */
+function buildReviewMessage(notice: SubscriptionNotice): SlackMessage {
+  const detail = notice.detail ?? {};
+  const rating = num(detail.rating);
+  const priorRating = num(detail.priorRating);
+  const storeName = str(detail.storeName) ?? notice.shopName ?? 'Unknown store';
+  const country = str(detail.country);
+  const body = str(detail.body);
+  const permalink = str(detail.permalink);
+
+  const removed = notice.type === 'review_removed';
+  const edited = notice.type === 'review_edited';
+
+  // A removal is bad news at any rating — a five-star disappearing is a loss,
+  // and a one-star disappearing still means the listing changed under you.
+  const emoji = removed
+    ? ':ghost:'
+    : rating !== null && rating <= 2
+      ? ':rotating_light:'
+      : rating !== null && rating >= 4
+        ? ':star2:'
+        : ':star:';
+
+  const headline = removed
+    ? 'Review no longer on the listing'
+    : edited
+      ? 'Review edited'
+      : 'New review';
+
+  const ratingLine =
+    rating === null
+      ? '—'
+      : edited && priorRating !== null && priorRating !== rating
+        ? `${stars(priorRating)} → ${stars(rating)}`
+        : `${stars(rating)} ${rating}/5`;
+
+  const blocks: unknown[] = [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `${emoji} *${headline}* — ${escapeMrkdwn(storeName)}`,
+      },
+    },
+    {
+      type: 'section',
+      fields: [
+        field('Rating', ratingLine),
+        field('App', notice.appName ?? notice.appId),
+        field('Store', country ? `${storeName}\n${country}` : storeName),
+        field(
+          'Customer',
+          notice.shopDomain ?? (notice.shopId ? `Shop ${notice.shopId}` : 'Not matched'),
+        ),
+      ],
+    },
+  ];
+
+  if (body) {
+    const excerpt =
+      body.length > REVIEW_EXCERPT_CHARS ? `${body.slice(0, REVIEW_EXCERPT_CHARS)}…` : body;
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: `>${escapeMrkdwn(excerpt).replace(/\n/g, '\n>')}` },
+    });
+  }
+
+  if (removed) {
+    blocks.push({
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          // Said plainly, because the listing gives no way to tell these apart
+          // and a message that picked one would be inventing the reason.
+          text: 'It is no longer on the listing. Shopify removing it, the merchant deleting it, and the store closing all look the same from outside.',
+        },
+      ],
+    });
+  }
+
+  if (permalink && !removed) {
+    blocks.push({
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: `<${permalink}|View on the App Store>` }],
+    });
+  }
+
+  blocks.push({
+    type: 'context',
+    elements: [
+      {
+        type: 'mrkdwn',
+        text: `<!date^${Math.floor(
+          new Date(notice.occurredAt).getTime() / 1000,
+        )}^{date_short_pretty}|${notice.occurredAt}>`,
+      },
+    ],
+  });
+
+  return {
+    text: `${headline}: ${storeName}${rating === null ? '' : ` — ${rating}/5`}`,
+    blocks,
+  };
+}
+
 export function buildMessage(notice: SubscriptionNotice): SlackMessage {
+  if (notice.type.startsWith('review_')) return buildReviewMessage(notice);
+
   const presentation = EVENT_PRESENTATION[notice.type] ?? {
     headline: notice.type,
     emoji: ':bell:',

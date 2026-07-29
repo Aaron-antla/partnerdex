@@ -570,6 +570,15 @@ h3,
   grid-column: 1 / -1;
 }
 
+/*
+ * Cards stacked straight onto the page rather than laid out in `.card-grid` get
+ * no gap from anything, so they sit flush against each other. Same 16px the
+ * grid uses, so a stack and a grid read as one rhythm.
+ */
+.main>.card {
+  margin-bottom: 16px;
+}
+
 .card-head {
   display: flex;
   align-items: flex-start;
@@ -1078,10 +1087,6 @@ thead th {
 
 /* --------------------------------------------------------- notifications */
 
-.channel-form {
-  margin-bottom: 20px;
-}
-
 .channel-form .card-subtitle {
   margin-bottom: 14px;
   max-width: 62ch;
@@ -1154,10 +1159,23 @@ button.primary:disabled,
   color: var(--delta-down);
 }
 
+/* Used as a plain container by Notifications and as a real <ul> by App
+   listings, so the list reset lives here rather than at either call site. */
 .channel-list {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* The monospace `.channel-hint` is for a masked credential. Prose in the same
+   slot — a review count, a listing title — is not that, and reads badly in it. */
+.channel-note {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .channel {
@@ -1460,4 +1478,485 @@ button.primary:disabled,
   margin: 12px 0 0;
   color: var(--delta-down);
   font-size: 13px;
+}
+/* ---------------------------------------------------------------- reviews
+ *
+ * A review is prose, so it is set as prose: a list of readable blocks rather
+ * than table rows that would clip the one part worth reading.
+ *
+ * The removed state is the design problem here. A review that is no longer on
+ * the listing has to look plainly different without looking deleted — it is
+ * still real, still says what it said, and is often the only surviving copy —
+ * so it recedes rather than being struck through, and the badge carries the
+ * fact in words.
+ */
+.review-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.review {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.review:first-child {
+  padding-top: 0;
+}
+
+.review:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.review-list-compact .review {
+  padding: 12px 0;
+}
+
+/* Recessive, not erased: the text stays legible because it is the point. */
+.review-removed .review-body,
+.review-removed .review-store {
+  color: var(--text-secondary);
+}
+
+.review-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.review-store {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.review-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.review-body {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.review-reply {
+  margin: 0 0 8px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+}
+
+.review-reply p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+}
+
+.review-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.review-customer {
+  font-size: 12px;
+  color: var(--brand-accent);
+  text-decoration: none;
+}
+
+.review-customer:hover {
+  text-decoration: underline;
+}
+
+.review-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/*
+ * Stars carry the rating twice over: as a shape and as an `aria-label`. The
+ * filled glyphs owe 3:1 as marks, and the empty ones are deliberately below
+ * that — they are the absence of a rating, and reading them as filled is the
+ * only failure that would matter.
+ */
+.stars {
+  font-size: 13px;
+  letter-spacing: 1px;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.stars-1,
+.stars-2 {
+  color: var(--critical);
+}
+
+.stars-4,
+.stars-5 {
+  color: var(--good);
+}
+
+.stars-empty {
+  color: var(--border);
+}
+
+.pill-removed {
+  color: var(--delta-down);
+  border-color: color-mix(in srgb, var(--delta-down) 40%, transparent);
+}
+
+/* An edit is a change, not a verdict — the rating beside it says which. */
+.pill-edited {
+  color: var(--muted);
+}
+
+.link-button {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--brand-accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+.review-picker {
+  width: 100%;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.review-picker label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.review-picker input {
+  width: 100%;
+}
+
+.review-picker-error {
+  margin: 8px 0 0;
+  color: var(--delta-down);
+  font-size: 12px;
+}
+
+.review-candidates {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.review-candidates button {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.review-candidates button:hover:not(:disabled) {
+  background: var(--hover-wash);
+}
+
+.review-candidates button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.candidate-name {
+  display: block;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.candidate-meta,
+.candidate-empty {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.candidate-empty {
+  padding: 6px 8px;
+}
+
+.review-picker-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+/* The merchant's own words on the timeline, quoted rather than restated. */
+.event-quote {
+  margin: 4px 0 6px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------- customer detail: apps
+ *
+ * The Apps table carries a review in one of its cells, which is a paragraph of
+ * prose in a column that has to stay scannable. Only the rating and whether it
+ * still stands are inline; the text lives in a popover a click away.
+ */
+/* Right-aligned like every other cell in this table but the first. */
+.review-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+/*
+ * Underlined, because a row of stars reads as a rendered value rather than as
+ * something to press. The rule is drawn in the border colour so it signals
+ * "clickable" without competing with the stars it sits under, and firms up on
+ * hover the way the other link-like controls here do.
+ */
+.review-stars-button {
+  background: none;
+  border: 0;
+  padding: 2px;
+  margin: -2px;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-underline-offset: 3px;
+}
+
+.review-stars-button:hover {
+  background: var(--hover-wash);
+  text-decoration-color: var(--text-secondary);
+}
+
+/*
+ * Pinned to the viewport rather than anchored in the cell.
+ *
+ * The table lives in a `.table-wrap`, and an `overflow-x: auto` ancestor clips
+ * on both axes — an absolutely-positioned panel in the last column would be cut
+ * off at exactly the edge it opens against. `top`/`right` are measured from the
+ * trigger when it opens, and any scroll closes it.
+ */
+.review-popover {
+  position: fixed;
+  z-index: 20;
+  width: min(380px, 70vw);
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+  box-shadow: var(--shadow-md);
+  white-space: normal;
+  /* The cell it opens from is a numeric column and aligns its text right.
+     Prose does not inherit that. */
+  text-align: left;
+  /* A merchant can write at length. Cap it and scroll rather than letting the
+     panel run off whichever edge it opened towards. */
+  max-height: min(320px, 60vh);
+  overflow-y: auto;
+}
+
+/* Dark mode builds elevation from surface value rather than shadow, so a
+   popover over a card needs a border that reads at this depth. */
+:root[data-theme='dark'] .review-popover {
+  background: var(--surface-2);
+}
+
+.review-popover .review-body {
+  margin: 8px 0;
+}
+
+.review-popover .review-head {
+  margin-bottom: 0;
+}
+
+.pill-published {
+  color: var(--delta-up);
+  border-color: color-mix(in srgb, var(--delta-up) 40%, transparent);
+}
+
+/* A second line inside a table cell: the money behind a payment count. */
+.cell-note {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.muted-cell {
+  color: var(--muted);
+}
+
+/* ------------------------------------------------ collapsible card heading */
+.card-collapse {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.card-collapse-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chevron {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  transition: transform 150ms ease;
+}
+
+.chevron-open {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron {
+    transition: none;
+  }
+}
+
+/* ------------------------------------------------------- attention banner
+ *
+ * A compact strip, not a `.notice`: it reports something to *do* rather than
+ * something that went wrong, so it keeps the critical accent for the eye but
+ * stays one line tall and carries its action with it.
+ */
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+}
+
+.banner p {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  max-width: 82ch;
+}
+
+.banner strong {
+  font-size: 13px;
+}
+
+/* The left rule carries the severity; the text stays on the card surface where
+   it keeps its 4.5:1, rather than being set on a tinted fill. */
+.banner-attention {
+  border-left: 3px solid var(--critical);
+}
+
+/* ------------------------------------------------------------------ modal */
+.modal {
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(80vh, 760px);
+  padding: 20px 22px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-md);
+  overflow-y: auto;
+}
+
+/* Dark mode builds elevation from surface value, so a panel above a card takes
+   the next step up rather than a shadow it has deliberately turned off. */
+:root[data-theme='dark'] .modal {
+  background: var(--surface-2);
+}
+
+.modal::backdrop {
+  background: rgba(15, 23, 42, 0.45);
+}
+
+:root[data-theme='dark'] .modal::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-close {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.modal-close:hover {
+  background: var(--hover-wash);
+}
+
+.modal .card-subtitle {
+  margin: 6px 0 14px;
+  max-width: 72ch;
 }

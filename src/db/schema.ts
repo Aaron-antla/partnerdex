@@ -6,8 +6,10 @@
  *   2. derived indexes  — `subscriptions`, `install_intervals`, normalized at
  *                         write time so read-time math is sums + date compares
  *   3. operational      — `sync_state`, `metric_cache`, `drift_snapshots`
- *   4. notifications    — `notification_channels` and the two tables that decide
- *                         what has already been said, and to whom
+ *   4. durable          — `notification_channels` and the two tables that decide
+ *                         what has already been said and to whom, plus
+ *                         `app_reviews`, which holds the only surviving copy of
+ *                         a review once the App Store stops serving it
  *
  * Roles 1 and 2 are disposable: both are rebuilt from the API on demand. Role 4
  * is the only place in this store holding state that cannot be recovered by
@@ -215,6 +217,113 @@ CREATE TABLE IF NOT EXISTS notification_deliveries (
 ) WITHOUT ROWID;
 
 CREATE INDEX IF NOT EXISTS idx_deliveries_at ON notification_deliveries (delivered_at);
+
+-- Which App Store listing belongs to which app.
+--
+-- An organization has many apps and the Partner API will not say which listing
+-- any of them is published under — an app knows its id, name and api key, and
+-- nothing about the page merchants actually see. Only the partner can supply
+-- that link, so it is data they enter rather than configuration in the code.
+--
+-- Durable for the same reason the notification channels are: nothing here can
+-- be recovered by re-syncing. It is deliberately keyed on the app rather than
+-- on the handle so that everything the listing page can tell us — reviews now,
+-- and whatever a funnel needs later — has one row to hang off.
+--
+-- \`url\` keeps what was actually pasted; \`handle\` is the slug parsed out of it
+-- and is what the crawler builds requests from. Storing both means a listing
+-- whose URL shape changes can be re-parsed without asking the partner again.
+CREATE TABLE IF NOT EXISTS app_listings (
+  app_id       TEXT PRIMARY KEY,
+  handle       TEXT NOT NULL,
+  url          TEXT NOT NULL,
+  -- 'manual' (entered in the dashboard) or 'config' (seeded from the
+  -- APP_STORE_HANDLES env var). A person's entry outranks the environment.
+  source       TEXT NOT NULL DEFAULT 'manual',
+  -- The listing's own title, read from its JSON-LD the last time it was
+  -- checked. Confirmation that the pasted URL is the app the partner meant.
+  listing_name TEXT,
+  checked_at   TEXT,
+  last_error   TEXT,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_listings_handle ON app_listings (handle);
+
+-- App Store reviews, scraped from the public listing page.
+--
+-- This table is role 4, not role 1, and the distinction is the whole feature.
+-- Every other raw table can be thrown away and re-fetched; a review cannot. Once
+-- Shopify or the merchant takes one down it is gone from the listing forever, so
+-- the only copy that will ever exist again is this one. Nothing here is ever
+-- deleted — removal is recorded, not applied.
+--
+-- \`review_id\` is Shopify's own id from the listing markup, which is what makes
+-- re-crawling idempotent, removal detectable, and the notification ledger able
+-- to promise a review is announced exactly once.
+--
+-- \`removed_at\` is set when a full sweep completes without seeing the review
+-- again. It deliberately does not say *who* removed it: a Shopify purge, a
+-- merchant deleting their own review, and a closed store are indistinguishable
+-- from outside, and a column implying otherwise would be inventing a fact.
+--
+-- \`content_hash\` covers the fields a merchant can edit (rating and body). A
+-- change means the review was rewritten rather than replaced, which is a
+-- different piece of news from a new review arriving.
+--
+-- \`shop_id\` is the link to the Customers page, and it is a guess. Reviews carry
+-- the merchant's *store name* and never the myshopify domain, so the match runs
+-- against \`shops.name\` and is only trusted when exactly one shop that actually
+-- installed the app answers to that name. \`match_method\` records how the link
+-- was arrived at; 'manual' is a human's decision and the matcher never overrides
+-- one.
+CREATE TABLE IF NOT EXISTS app_reviews (
+  review_id       TEXT PRIMARY KEY,
+  app_id          TEXT NOT NULL,
+  rating          INTEGER NOT NULL,
+  posted_on       TEXT NOT NULL,
+  body            TEXT NOT NULL DEFAULT '',
+  store_name      TEXT NOT NULL DEFAULT '',
+  country         TEXT,
+  usage_duration  TEXT,
+  reply_body      TEXT,
+  reply_on        TEXT,
+  permalink       TEXT,
+  shop_id         TEXT NOT NULL DEFAULT '',
+  -- 'auto' | 'manual' | 'ambiguous' | 'none'
+  match_method    TEXT NOT NULL DEFAULT 'none',
+  content_hash    TEXT NOT NULL DEFAULT '',
+  -- When we last saw the text or rating change, and what the rating was before.
+  -- A 5-star rewritten as a 1-star is the single most actionable thing that can
+  -- happen to a review, and it never reaches the newest page — the review keeps
+  -- its original post date and stays exactly where it was.
+  edited_at       TEXT,
+  prior_rating    INTEGER,
+  first_seen_at   TEXT NOT NULL,
+  last_seen_at    TEXT NOT NULL,
+  removed_at      TEXT
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_reviews_app_posted ON app_reviews (app_id, posted_on);
+CREATE INDEX IF NOT EXISTS idx_reviews_shop ON app_reviews (shop_id, posted_on);
+CREATE INDEX IF NOT EXISTS idx_reviews_removed ON app_reviews (removed_at);
+CREATE INDEX IF NOT EXISTS idx_reviews_match ON app_reviews (match_method);
+
+-- The listing's own aggregate, copied verbatim at each crawl.
+--
+-- We can compute an average from the rows above, but Shopify's published figure
+-- is the one merchants see, and the two can legitimately disagree — its rounding
+-- and its eligibility rules are not ours. Recording theirs alongside ours turns
+-- that disagreement into something visible instead of a silent drift, and
+-- \`rating_count\` is also the cheap signal that a sweep is due.
+CREATE TABLE IF NOT EXISTS app_review_snapshots (
+  app_id       TEXT NOT NULL,
+  captured_at  TEXT NOT NULL,
+  rating_value REAL,
+  rating_count INTEGER,
+  PRIMARY KEY (app_id, captured_at)
+) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS sync_state (
   key            TEXT PRIMARY KEY,

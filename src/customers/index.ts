@@ -1,6 +1,7 @@
 import { getConfig } from '../config.js';
 import { getDb, type Db } from '../db/index.js';
 import { asOfPredicate, type AsOfOptions } from '../metrics/asof.js';
+import { reviewsForShop, type ReviewSummary } from '../reviews/index.js';
 import { resolveScopedAppIds } from '../sync/index.js';
 
 /**
@@ -292,7 +293,41 @@ export interface CustomerDetail {
   lastEventAt: string | null;
   subscriptions: CustomerSubscription[];
   events: CustomerEventRecord[];
-  apps: Array<{ appId: string; appName: string | null; installedAt: string | null }>;
+  /**
+   * One row per app this merchant has ever had, whether or not they pay for it.
+   *
+   * The page used to lead with live subscriptions, which answered "what are
+   * they paying for" and quietly dropped every app they installed and never
+   * bought — the population most worth looking at on a customer's page.
+   */
+  apps: CustomerApp[];
+}
+
+/** The whole relationship with one app, on one line. */
+export interface CustomerApp {
+  appId: string;
+  appName: string | null;
+  /**
+   * The app's App Store listing, when one is mapped. Present so the page can
+   * offer a "write a review" link for a merchant who has not left one.
+   */
+  listingUrl: string | null;
+  /** The plan in force, or the last one they held. */
+  planName: string | null;
+  /** The price as billed — 299 on an annual plan, not the normalized 24.92. */
+  amount: number | null;
+  billingInterval: string | null;
+  currency: string | null;
+  /** Normalized monthly, and zero unless a subscription is live right now. */
+  mrr: number;
+  /** The same five words the Customers list uses, scoped to this one app. */
+  status: CustomerStatus;
+  /** When this app first appeared for this merchant: install, else activation. */
+  since: string | null;
+  paymentCount: number;
+  paidGross: number;
+  /** What they said on the listing, if we have found it. */
+  review: ReviewSummary | null;
 }
 
 interface SubDetailRow {
@@ -334,6 +369,113 @@ function subscriptionStatus(
   if (row.trialStatus === 'in_trial') return 'trialing';
   // Activated but never billed and never cancelled: it has not started earning.
   return 'pending';
+}
+
+/**
+ * One row per app, folded together from the four things that know about it.
+ *
+ * The awkward part is that none of the sources agrees on which apps exist. A
+ * merchant can pay for an app whose install predates `SYNC_START_DATE`, install
+ * one they never pay for, and — through a manual link — have a review against
+ * an app we have no other record of. Taking the union rather than driving off
+ * any one table is what keeps all three on the page.
+ */
+function buildCustomerApps(input: {
+  subs: SubDetailRow[];
+  detailed: CustomerSubscription[];
+  liveCharges: Set<string>;
+  installs: Array<{ appId: string; since: string | null; liveNow: number }>;
+  moneyByApp: Array<{ appId: string; paidGross: number; paymentCount: number }>;
+  listingUrls: Map<string, string>;
+  reviewsByApp: Map<string, ReviewSummary>;
+  appNames: Map<string, string>;
+}): CustomerApp[] {
+  const { subs, detailed, liveCharges, installs, moneyByApp, listingUrls, reviewsByApp, appNames } =
+    input;
+
+  const installByApp = new Map(installs.map((row) => [row.appId, row]));
+  const moneyByAppId = new Map(moneyByApp.map((row) => [row.appId, row]));
+  const statusByCharge = new Map(detailed.map((row) => [row.chargeId, row.status]));
+
+  const appIdsSeen = new Set<string>([
+    ...installs.map((row) => row.appId),
+    ...subs.map((row) => row.appId),
+    ...moneyByApp.map((row) => row.appId),
+    ...reviewsByApp.keys(),
+  ]);
+
+  const rows: CustomerApp[] = [];
+
+  for (const appId of appIdsSeen) {
+    // `subs` arrives newest first, so the first match is the current story and
+    // the rest are the plan changes behind it.
+    const forApp = subs.filter((row) => row.appId === appId);
+    const current = forApp[0] ?? null;
+    const live = forApp.find((row) => liveCharges.has(row.chargeId)) ?? null;
+    const shown = live ?? current;
+
+    const install = installByApp.get(appId);
+    const money = moneyByAppId.get(appId);
+    const review = reviewsByApp.get(appId) ?? null;
+
+    // The same five words the Customers list uses, scoped to this one app, so a
+    // merchant reading as "paying" overall cannot be a mystery when only one of
+    // their three apps is what is paying.
+    const status = statusOf(
+      {
+        shopId: '',
+        name: null,
+        domain: null,
+        mrr: 0,
+        currency: null,
+        activeSubscriptions: live ? 1 : 0,
+        onTrial: forApp.some((row) => statusByCharge.get(row.chargeId) === 'trialing') ? 1 : 0,
+        activeInstalls: install?.liveNow === 1 ? 1 : 0,
+        lifetimeGross: 0,
+        lifetimeNet: 0,
+        firstSeenAt: null,
+        lastEventAt: null,
+      },
+      forApp.filter((row) => row.conversionAt !== null).length,
+    );
+
+    rows.push({
+      appId,
+      // An app they installed and never paid for has no subscription to carry
+      // its name, which is exactly the row this table exists to show.
+      appName: appNames.get(appId) ?? shown?.appName ?? review?.appName ?? null,
+      listingUrl: listingUrls.get(appId) ?? null,
+      planName: shown?.planName ?? null,
+      amount: shown?.amount ?? null,
+      billingInterval: shown?.billingInterval ?? null,
+      currency: shown?.currency ?? null,
+      // Only a live subscription contributes, on the same gate MRR itself uses:
+      // the figure here and the figure in the MRR series are the same number.
+      mrr: live ? live.monthlyAmount : 0,
+      status,
+      since: install?.since ?? shown?.activatedAt ?? null,
+      paymentCount: money?.paymentCount ?? 0,
+      paidGross: money?.paidGross ?? 0,
+      review,
+    });
+  }
+
+  // Paying apps first, then by what they have been worth: the top of this table
+  // should be the part of the relationship worth protecting.
+  const rank: Record<CustomerStatus, number> = {
+    paying: 0,
+    trialing: 1,
+    installed: 2,
+    churned: 3,
+    gone: 4,
+  };
+  return rows.sort(
+    (a, b) =>
+      rank[a.status] - rank[b.status] ||
+      b.mrr - a.mrr ||
+      b.paidGross - a.paidGross ||
+      (a.appName ?? a.appId).localeCompare(b.appName ?? b.appId),
+  );
 }
 
 export function getCustomer(
@@ -441,17 +583,73 @@ export function getCustomer(
     currency: string | null;
   };
 
-  const apps = db
+  /**
+   * Installs per app: when the relationship started, and whether it is still on.
+   *
+   * `MIN(started_at)` rather than the current interval's start, because a
+   * merchant who uninstalled for a fortnight in 2023 has been a customer since
+   * they first arrived, not since they came back.
+   */
+  const installs = db
     .prepare(
-      `SELECT i.app_id AS appId, a.name AS appName, MIN(i.started_at) AS installedAt
+      `SELECT i.app_id AS appId,
+              MIN(i.started_at) AS since,
+              MAX(CASE WHEN i.started_at <= @now AND (i.ended_at IS NULL OR i.ended_at > @now)
+                       THEN 1 ELSE 0 END) AS liveNow
        FROM install_intervals i
-       LEFT JOIN apps a ON a.id = i.app_id
        WHERE i.shop_id = @shopId AND i.app_id ${inScope}
-         AND i.started_at <= @now AND (i.ended_at IS NULL OR i.ended_at > @now)
-       GROUP BY i.app_id, a.name
-       ORDER BY a.name`,
+       GROUP BY i.app_id`,
     )
-    .all({ ...appParams, shopId, now }) as CustomerDetail['apps'];
+    .all({ ...appParams, shopId, now }) as Array<{
+    appId: string;
+    since: string | null;
+    liveNow: number;
+  }>;
+
+  /**
+   * Money per app.
+   *
+   * Payments counts only charges, while the total nets refunds off — a merchant
+   * who paid twice and was refunded once made two payments, not three, and is
+   * out one payment's worth of money.
+   */
+  const moneyByApp = db
+    .prepare(
+      `SELECT app_id AS appId,
+              COALESCE(SUM(gross_amount), 0) AS paidGross,
+              COALESCE(SUM(CASE WHEN gross_amount > 0 THEN 1 ELSE 0 END), 0) AS paymentCount
+       FROM transactions
+       WHERE shop_id = @shopId AND app_id ${inScope}
+       GROUP BY app_id`,
+    )
+    .all({ ...appParams, shopId }) as Array<{
+    appId: string;
+    paidGross: number;
+    paymentCount: number;
+  }>;
+
+  const listings = db
+    .prepare('SELECT app_id AS appId, url FROM app_listings')
+    .all() as Array<{ appId: string; url: string }>;
+
+  const appNames = db.prepare('SELECT id, name FROM apps').all() as Array<{
+    id: string;
+    name: string;
+  }>;
+
+  const reviewsByApp = new Map<string, ReviewSummary>();
+  for (const review of reviewsForShop(shop.id)) {
+    // The App Store allows one review per shop per app, but a manual link can
+    // put a second against the pair. A review still on the listing wins over one
+    // that is gone — a removal must not hide what a merchant is publicly saying
+    // today — and the newest wins between two of the same kind.
+    const held = reviewsByApp.get(review.appId);
+    const better =
+      !held ||
+      (held.removedAt !== null && review.removedAt === null) ||
+      (held.removedAt === null) === (review.removedAt === null) && review.postedOn > held.postedOn;
+    if (better) reviewsByApp.set(review.appId, review);
+  }
 
   const detailed: CustomerSubscription[] = subs.map((row) => ({
     chargeId: row.chargeId,
@@ -472,6 +670,17 @@ export function getCustomer(
     paidSaleCount: row.paidSaleCount,
     lastSaleAt: row.lastSaleAt,
   }));
+
+  const apps = buildCustomerApps({
+    subs,
+    detailed,
+    liveCharges,
+    installs,
+    moneyByApp,
+    listingUrls: new Map(listings.map((row) => [row.appId, row.url])),
+    reviewsByApp,
+    appNames: new Map(appNames.map((row) => [row.id, row.name])),
+  });
 
   const mrr = subs.reduce(
     (sum, row) => sum + (liveCharges.has(row.chargeId) ? row.monthlyAmount : 0),
@@ -505,7 +714,10 @@ export function getCustomer(
         currency: null,
         activeSubscriptions,
         onTrial,
-        activeInstalls: apps.length,
+        // `apps` now carries every app they have ever had, so the count of
+        // *live* installs has to be taken rather than assumed from its length —
+        // otherwise a merchant who uninstalled everything reads as installed.
+        activeInstalls: installs.filter((row) => row.liveNow === 1).length,
         lifetimeGross: money.gross,
         lifetimeNet: money.net,
         firstSeenAt: null,

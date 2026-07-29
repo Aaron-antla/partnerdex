@@ -70,6 +70,8 @@ interface PendingRow {
   prev_plan_name: string | null;
   prev_amount: number | null;
   prev_billing_interval: string | null;
+  /** JSON, and the only carrier a review event has — it touches no charge. */
+  detail: string | null;
 }
 
 /**
@@ -103,7 +105,7 @@ function pendingFor(
   const rows = db
     .prepare(
       `SELECT e.event_id, e.type, e.occurred_at, e.shop_id, e.app_id, e.charge_id,
-              e.plan_name, e.net_change, e.currency,
+              e.plan_name, e.net_change, e.currency, e.detail,
               sh.name AS shop_name,
               sh.myshopify_domain AS shop_domain,
               ap.name AS app_name,
@@ -174,7 +176,19 @@ function toNotice(row: PendingRow): SubscriptionNotice {
     // Only a trial start is waiting on a trial to end. The column is populated
     // on converted and cancelled trials too, where it is history.
     trialEndsAt: row.type === 'trial_started' ? row.trial_ends_at : null,
+    detail: parseDetail(row.detail),
   };
+}
+
+/** Detail is written by us, but a malformed blob must not stop a delivery. */
+function parseDetail(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

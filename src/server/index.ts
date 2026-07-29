@@ -8,11 +8,21 @@ import { getDb } from '../db/index.js';
 import { type RawMetricQuery } from '../metrics/context.js';
 import { listMetrics, runMetric } from '../metrics/registry.js';
 import { dispatchPending } from '../notifications/dispatch.js';
+import {
+  linkCandidates,
+  listReviews,
+  type ReviewLinkFilter,
+  type ReviewSort,
+  type ReviewStatusFilter,
+} from '../reviews/index.js';
+import { setReviewShop } from '../appstore/match.js';
+import { buildReviewEvents } from '../appstore/events.js';
 import { resolveScopedAppIds } from '../sync/index.js';
 import { onSyncComplete, startSyncScheduler, syncStatus } from '../sync/scheduler.js';
 import { authRequired, authRouter, requireAuth } from './auth.js';
 import { sendError } from './errors.js';
 import { notificationsRouter } from './notifications.js';
+import { listingsRouter } from './listings.js';
 
 /** Everything the dashboard renders, so one request paints the whole page. */
 const HEADLINE_METRICS = [
@@ -35,6 +45,10 @@ const HEADLINE_METRICS = [
   'revenue_churn',
   'subscription_churn',
   'logo_churn',
+  'reviews_posted',
+  'reviews_live',
+  'reviews_average_rating',
+  'reviews_removed',
 ];
 
 function queryOf(request: express.Request): RawMetricQuery {
@@ -52,6 +66,7 @@ function queryOf(request: express.Request): RawMetricQuery {
     includeUsage: pick('includeUsage'),
     includeTrials: pick('includeTrials'),
     byShop: pick('byShop'),
+    rating: pick('rating'),
     nocache: pick('nocache'),
   };
 }
@@ -89,6 +104,7 @@ export function createApp(): express.Express {
   app.use('/api', requireAuth);
 
   app.use('/api/notifications', notificationsRouter());
+  app.use('/api/listings', listingsRouter());
 
   app.get('/api/metrics', (_request, response) => {
     response.json({ metrics: listMetrics() });
@@ -199,6 +215,84 @@ export function createApp(): express.Express {
         return;
       }
       response.json(detail);
+    } catch (error) {
+      sendError(response, error);
+    }
+  });
+
+  /**
+   * The review list. Filters are all optional and independent, so the page can
+   * ask for "one-star reviews we never matched to a customer" in one request.
+   */
+  app.get('/api/reviews', (request, response) => {
+    try {
+      const pick = (name: string): string | undefined => {
+        const value = request.query[name];
+        return typeof value === 'string' ? value : undefined;
+      };
+      const appIds = pick('appIds');
+      const rating = Number(pick('rating'));
+      const limit = Number(pick('limit'));
+      const offset = Number(pick('offset'));
+
+      response.json(
+        listReviews({
+          search: pick('q') ?? '',
+          appIds: appIds ? appIds.split(',').filter(Boolean) : [],
+          rating: Number.isInteger(rating) && rating >= 1 && rating <= 5 ? rating : null,
+          status: (pick('status') ?? 'all') as ReviewStatusFilter,
+          linked: (pick('linked') ?? 'all') as ReviewLinkFilter,
+          sort: (pick('sort') ?? 'newest') as ReviewSort,
+          limit: Number.isFinite(limit) ? limit : undefined,
+          offset: Number.isFinite(offset) ? offset : undefined,
+        }),
+      );
+    } catch (error) {
+      sendError(response, error);
+    }
+  });
+
+  /** Shops offered when linking a review by hand. */
+  app.get('/api/reviews/:reviewId/candidates', (request, response) => {
+    try {
+      const search = typeof request.query.q === 'string' ? request.query.q : '';
+      response.json({ candidates: linkCandidates(request.params.reviewId, search) });
+    } catch (error) {
+      sendError(response, error);
+    }
+  });
+
+  /**
+   * Linking a review to a customer by hand, and unlinking it again.
+   *
+   * A body of `{ shopId: null }` clears the link and hands the review back to
+   * the automatic matcher, which is the way out of a mistaken link rather than
+   * being stuck with it. Both take effect immediately; the next sync's rebuild
+   * is what carries the change onto the customer's timeline.
+   */
+  app.put('/api/reviews/:reviewId/shop', (request, response) => {
+    try {
+      const body = request.body as { shopId?: unknown };
+      const shopId =
+        body?.shopId === null || body?.shopId === undefined ? null : String(body.shopId);
+
+      if (shopId !== null) {
+        const exists = getDb().prepare('SELECT 1 FROM shops WHERE id = ?').get(shopId);
+        if (!exists) {
+          response.status(400).json({ error: `No customer with shop id ${shopId}.` });
+          return;
+        }
+      }
+
+      if (!setReviewShop(getDb(), request.params.reviewId, shopId)) {
+        response.status(404).json({ error: `No review with id ${request.params.reviewId}.` });
+        return;
+      }
+
+      // Recompile straight away so the customer's timeline agrees with the link
+      // the reader just made, rather than only after the next sync.
+      buildReviewEvents(getDb());
+      response.json({ ok: true, shopId, matchMethod: shopId ? 'manual' : 'none' });
     } catch (error) {
       sendError(response, error);
     }

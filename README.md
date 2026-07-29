@@ -249,6 +249,97 @@ converges rather than duplicating:
 npm run rebuild
 ```
 
+## Reviews
+
+The Partner API carries **no review data at all** — the `App` object exposes an
+id, a name, an api key and an event feed, and nothing about the listing that
+holds your reviews. So reviews are read from the public App Store listing page,
+which is server-rendered and gives each review a stable id.
+
+It cannot tell you which listing an app is published under either, and an
+organization has many apps. So that mapping is something you enter: open
+**App listings** under Settings, pick an app, and paste the address of its App
+Store page. Anything from `https://apps.shopify.com/your-app` to the full URL
+with a `/reviews` path on the end works — only the handle is kept.
+
+**Check** fetches the listing and shows the app name it claims. Worth pressing
+once: a wrong URL costs nothing when you save it and surfaces days later as an
+app that mysteriously has no reviews.
+
+The mapping is stored in the database, not in configuration, so it survives
+restarts and is there for anything else the listing page can be made to tell us.
+`APP_STORE_HANDLES` still works as a seed for containers that come up on an
+empty volume — it fills in apps that have no listing yet, and never overwrites
+one entered in the dashboard.
+
+The **Reviews** page then reports how the listing is moving: how many reviews it
+carries, the average rating, what has been removed, and what arrived in the
+period — each reconstructible as of any past date, and all four filterable to a
+single star rating. The reviews themselves are read on the merchant's own
+customer page, beside everything else they have done.
+
+### Noticing a review that disappears
+
+New reviews are cheap to find: the newest page is one request, and the listing
+publishes its own review count, so most syncs cost nothing more than that.
+Noticing a review that is *gone* is not — absence is only visible by walking
+every page and finding a gap.
+
+So a **sweep** walks the whole listing, by default once a day
+(`REVIEW_SWEEP_HOURS`) and immediately whenever the published count disagrees
+with what we hold. A review it does not see is marked removed **only if the
+sweep can prove it saw everything**: every page fetched cleanly, walked through
+to the page with no "next", and coming back with a count consistent with the
+listing's own. Fail any of those and the run records what it found and concludes
+nothing about what it did not.
+
+The asymmetry is deliberate. A missed removal is caught by the next sweep. A
+false removal puts a **Removed** badge on a review that is sitting there in
+public, and nothing later takes it back.
+
+Nothing is ever deleted. A removed review keeps its rating, its text and its
+link to a customer, because once the listing drops it, this is the only copy
+that will ever exist again.
+
+> **The badge says "Removed", not "Purged".** Shopify taking a review down, the
+> merchant deleting their own, and the store closing all present as the same
+> absence. Naming one would be a guess.
+
+### Which customer left it
+
+Reviews publish the merchant's **store name** and never their myshopify domain,
+and PartnerDex keys customers on a Partner API shop id — so the link is a guess,
+and it is made conservatively. The search runs only against shops that actually
+installed that app, and only a *unique* name match is accepted; two installers
+sharing a name is recorded as ambiguous and left unlinked.
+
+Anything left over is worth fixing, because an unattributed review is a hole in
+every figure on the Reviews page: the charts count it, and no customer owns it.
+So the page says so, in a banner above the cards with the work attached — **Link
+manually** opens the unmatched reviews with a shop picker on each. A manual link
+is never overwritten by a later sync.
+
+### What you get
+
+- A rating against every app on a merchant's own page — click the stars to read
+  it, and where they have not left one, a link that opens the App Store's write-
+  a-review dialog for you to send them
+- Slack alerts for a new review, a rewritten one, and one that disappears —
+  switch on **App Store Reviews** on the Notifications page
+- `reviews_posted`, `reviews_live`, `reviews_average_rating` and
+  `reviews_removed`, reconstructed as-of any past date like every other metric
+
+Two things to know about that history. Post dates are published for every live
+review, so *posted* counts backfill completely. Removals before your first crawl
+are unknowable and simply are not in the store — `meta.removalsKnownFrom` on
+every review metric carries that horizon. And the average rating is computed
+from the stored rows rather than copied from the listing, so it can differ
+slightly from Shopify's published figure; theirs is kept alongside it in
+`meta.publishedRating` so the two can be compared rather than silently diverge.
+
+Crawling is sequential, spaced, and identifies itself. `apps.shopify.com/robots.txt`
+does not exclude listing or review paths.
+
 ## Slack notifications
 
 The **Notifications** page turns the event stream above into messages. Add a
@@ -348,12 +439,22 @@ as it stood on that date*.
 | `GET /api/metrics/:metric` | One metric |
 | `GET /api/overview` | A page's worth of metrics in one call; `metrics=a,b,c` selects them |
 | `GET /api/customers` | Merchant list; `q=` searches name and myshopify domain, with `sort`, `limit`, `offset` |
-| `GET /api/customers/:shopId` | One merchant: live subscriptions, lifetime money, event timeline |
+| `GET /api/customers/:shopId` | One merchant: every app they have, lifetime money, charge history, event timeline |
+| `GET /api/listings` | Mapped App Store listings, and the apps that could have one |
+| `PUT /api/listings/:appId` | `{ url }` — maps an app to its listing; accepts any listing URL shape |
+| `DELETE /api/listings/:appId` | Unmaps it. Collected reviews are kept |
+| `POST /api/listings/:appId/check` | Fetches the listing and returns the app name it claims |
+| `GET /api/reviews` | Review list; `q=`, `rating`, `status=live\|removed`, `linked=matched\|unmatched`, `sort`, `limit`, `offset` |
+| `GET /api/reviews/:reviewId/candidates` | Shops offered when linking a review by hand |
+| `PUT /api/reviews/:reviewId/shop` | `{ shopId }` links it; `{ shopId: null }` unlinks and returns it to the matcher |
 | `GET /api/apps` | Apps in reporting scope |
 | `GET /api/status` | Row counts, last sync time, and the background loop's state under `sync` |
 
 Query parameters: `period`, `start`, `end`, `interval`, `appIds`,
-`includeAnnual`, `includeUsage`, `includeTrials`, `byShop`, `nocache`.
+`includeAnnual`, `includeUsage`, `includeTrials`, `byShop`, `rating`, `nocache`.
+
+`rating` (1–5) narrows the four `reviews_*` metrics to a single star rating and
+is ignored by every other metric.
 
 `interval` overrides the automatic granularity. The dashboard never sends it:
 the ladder in `time.ts` picks **daily** buckets up to 90 days and **monthly**
@@ -449,6 +550,8 @@ announcing an upgrade as a lost customer.
 | `src/sync/` | Pagination, ingest, and the write-time normalization in `derive.ts` |
 | `src/sync/events.ts` | The raw feed compiled into clean lifecycle events |
 | `src/customers/` | The customer read model, computed at read time |
+| `src/appstore/` | The listing map, and the crawl and parse behind reviews |
+| `src/reviews/` | The review read model |
 | `src/notifications/` | Topics, channels, Slack rendering, and the at-most-once dispatcher |
 | `src/metrics/asof.ts` | The as-of predicate — defined once, used by every report *and* the validators |
 | `src/metrics/time.ts` | Period parsing and the single range→interval ladder |
@@ -477,6 +580,16 @@ Two design rules are worth preserving if you extend this:
   date as the MRR gate, because transactions from before then carry no charge id.
 - **LTV is directional.** Buckets with zero churn have no finite LTV and report
   as 0; the count is in `meta.bucketsWithoutChurn`.
+- **Reviews come from an unversioned page.** Parsing keys on the listing's
+  accessibility and data attributes rather than its layout classes, but Shopify
+  owes no compatibility here. A review whose rating cannot be read is skipped
+  rather than guessed at, so a redesign shows up as reviews going missing, not
+  as wrong ratings.
+- **Who removed a review is not knowable**, and neither is any removal that
+  happened before your first crawl.
+- **A review is matched to a customer by store name**, which is a guess. Only a
+  unique match among that app's installers is accepted; the rest are left for
+  you to link by hand.
 
 ## Testing
 

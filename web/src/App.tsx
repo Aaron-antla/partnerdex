@@ -18,8 +18,10 @@ import { Customers } from './components/Customers';
 import { Login } from './components/Login';
 import { MetricCard } from './components/MetricCard';
 import { Nav } from './components/Nav';
+import { Listings } from './components/Listings';
 import { Notifications } from './components/Notifications';
-import { metricsFor, pageById } from './pages';
+import { UnmatchedReviews } from './components/Reviews';
+import { DEFAULT_FILTERS, metricsFor, pageById } from './pages';
 
 const PERIODS = [
   { value: 'last_7_days', label: 'Last 7 days' },
@@ -212,15 +214,20 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
     appId: '',
     includeUsage: true,
     includeTrials: false,
+    rating: 0,
   });
 
   const route = useRoute();
   const page = useMemo(() => pageById(route.pageId), [route.pageId]);
   const isCustomers = page.kind === 'customers';
   const isNotifications = page.kind === 'notifications';
+  const isReviews = page.kind === 'reviews';
+  const isListings = page.kind === 'listings';
   // Only a grid of cards reads the shared window, so only it shows the filters
-  // that drive one — and only it has figures that could go stale.
-  const isMetrics = !isCustomers && !isNotifications;
+  // that drive one — and only it has figures that could go stale. Reviews
+  // qualifies: it carries cards over that window, with its own list underneath.
+  const isMetrics = !isCustomers && !isNotifications && !isListings;
+  const filters = page.filters ?? DEFAULT_FILTERS;
 
   const [collapsed, setCollapsed] = useState(
     () => window.localStorage.getItem(COLLAPSE_KEY) === '1',
@@ -359,50 +366,77 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
           <ThemeToggle theme={theme} onToggle={toggleTheme} />
         </header>
 
+        {/* Which filters a page shows is declared on the page, because they are
+            not universally meaningful: trials say nothing about a listing, and
+            a star rating says nothing about revenue. */}
         {!isMetrics ? null : (
           <div className="controls">
-            <div className="control">
-              <label htmlFor="app">App</label>
-              <select
-                id="app"
-                value={query.appId}
-                onChange={(event) => patch({ appId: event.target.value })}
-              >
-                <option value="">All apps in scope</option>
-                {apps.map((app) => (
-                  <option key={app.id} value={app.id}>
-                    {app.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {filters.includes('app') ? (
+              <div className="control">
+                <label htmlFor="app">App</label>
+                <select
+                  id="app"
+                  value={query.appId}
+                  onChange={(event) => patch({ appId: event.target.value })}
+                >
+                  <option value="">All apps in scope</option>
+                  {apps.map((app) => (
+                    <option key={app.id} value={app.id}>
+                      {app.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
 
-            <div className="control">
-              <label htmlFor="period">Range</label>
-              <select
-                id="period"
-                value={query.period}
-                onChange={(event) => patch({ period: event.target.value })}
-              >
-                {PERIODS.map((item) => (
-                  <option key={item.value} value={item.value}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {filters.includes('range') ? (
+              <div className="control">
+                <label htmlFor="period">Range</label>
+                <select
+                  id="period"
+                  value={query.period}
+                  onChange={(event) => patch({ period: event.target.value })}
+                >
+                  {PERIODS.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
 
-            <div className="control">
-              <label htmlFor="trials">Trials in MRR</label>
-              <select
-                id="trials"
-                value={String(query.includeTrials)}
-                onChange={(event) => patch({ includeTrials: event.target.value === 'true' })}
-              >
-                <option value="false">Excluded</option>
-                <option value="true">Included</option>
-              </select>
-            </div>
+            {filters.includes('trials') ? (
+              <div className="control">
+                <label htmlFor="trials">Trials in MRR</label>
+                <select
+                  id="trials"
+                  value={String(query.includeTrials)}
+                  onChange={(event) => patch({ includeTrials: event.target.value === 'true' })}
+                >
+                  <option value="false">Excluded</option>
+                  <option value="true">Included</option>
+                </select>
+              </div>
+            ) : null}
+
+            {filters.includes('rating') ? (
+              <div className="control">
+                <label htmlFor="rating">Rating</label>
+                <select
+                  id="rating"
+                  value={String(query.rating)}
+                  onChange={(event) => patch({ rating: Number(event.target.value) })}
+                >
+                  <option value="0">Any rating</option>
+                  {[5, 4, 3, 2, 1].map((value) => (
+                    <option key={value} value={value}>
+                      {value} star{value === 1 ? '' : 's'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
 
             {/* Granularity is derived, not chosen, so it is reported rather than
               offered: daily up to 90 days, monthly beyond. */}
@@ -420,7 +454,10 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
         {/* Notifications is configuration, not a report: it is worth setting up
             before the first sync lands, so an empty store is not a reason to
             replace the page with a "no data yet" notice. */}
-        {!error && !isNotifications && status && !hasData ? (
+        {/* Reviews come from the listing, not the Partner API, so a store with
+            no transactions is not a reason to tell that page it has no data —
+            it may have hundreds of reviews and says so itself when it does not. */}
+        {!error && !isNotifications && !isListings && !isReviews && status && !hasData ? (
           <div className="notice">
             <h2>No data yet</h2>
             {/* With the loop running this page fills itself in, so the only
@@ -451,6 +488,12 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
 
         {isNotifications ? <Notifications /> : null}
 
+        {isListings ? <Listings /> : null}
+
+        {/* Directly under the filters, because an unattributed review is a hole
+            in every figure below it — the charts count it, no customer owns it. */}
+        {isReviews ? <UnmatchedReviews appId={query.appId} /> : null}
+
         {isMetrics && loading && !overview ? (
           <div className="skeleton">Loading metrics…</div>
         ) : null}
@@ -466,6 +509,7 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
             ))}
           </div>
         ) : null}
+
 
         {status?.lastSyncAt ? (
           <p className="footnote">

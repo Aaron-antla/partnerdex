@@ -1,6 +1,8 @@
 import { getConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { buildCustomerEvents } from './events.js';
+import { buildReviewEvents } from '../appstore/events.js';
+import { matchReviewsToShops } from '../appstore/match.js';
 
 /**
  * Write-time normalization (spec 1.5). The Partner API hands back a stream of
@@ -473,6 +475,7 @@ export function rebuildDerivedTables(db: Db): {
   subscriptions: number;
   installs: number;
   customerEvents: number;
+  reviewEvents: number;
 } {
   const now = new Date().toISOString();
   const subscriptions = buildSubscriptions(db, now);
@@ -480,6 +483,14 @@ export function rebuildDerivedTables(db: Db): {
   // Strictly after the subscription index: the lifecycle compiler reads it as
   // the authority on normalized money and on which cancels were plan changes.
   const customerEvents = buildCustomerEvents(db);
+
+  // Reviews come last, and in this order for two reasons: the matcher searches
+  // shops that installed the app, which `install_intervals` has only just
+  // finished rebuilding, and `buildCustomerEvents` clears the table these are
+  // then appended to.
+  matchReviewsToShops(db);
+  const reviewEvents = buildReviewEvents(db);
+
   db.prepare('DELETE FROM metric_cache').run();
-  return { subscriptions, installs, customerEvents };
+  return { subscriptions, installs, customerEvents, reviewEvents };
 }

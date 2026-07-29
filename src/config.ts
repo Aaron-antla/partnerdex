@@ -63,6 +63,52 @@ function appIds(): string[] {
 }
 
 /**
+ * App id → App Store listing handle, as an optional *seed* for `app_listings`.
+ *
+ * The mapping itself lives in the database and is entered in the dashboard: an
+ * organization has many apps, the Partner API will not say which listing any of
+ * them is published under, and that is a fact the partner knows and may change
+ * on any given day — not a deployment concern.
+ *
+ * This variable stays supported so a container coming up on an empty volume can
+ * sync before anyone opens the UI. It only fills in apps that have no row yet;
+ * see `seedListingsFromConfig`.
+ */
+function appStoreHandles(): Record<string, string> {
+  const raw = process.env.APP_STORE_HANDLES?.trim();
+  if (!raw) return {};
+
+  const handles: Record<string, string> = {};
+  for (const entry of raw.split(',')) {
+    const pair = entry.trim();
+    if (!pair) continue;
+
+    const separator = pair.indexOf(':');
+    if (separator < 0) {
+      throw new ConfigError(
+        `APP_STORE_HANDLES entries must be "<appId>:<handle>", got "${pair}".`,
+      );
+    }
+
+    const appId = normalizeAppId(pair.slice(0, separator));
+    const handle = pair.slice(separator + 1).trim();
+
+    if (!appId) throw new ConfigError(`APP_STORE_HANDLES entry "${pair}" has no app id.`);
+    // The slug as it appears in the listing URL — letters, digits, hyphens. A
+    // full URL pasted in here would otherwise be silently glued onto the host
+    // and 404 on every crawl.
+    if (!/^[a-z0-9][a-z0-9-]*$/i.test(handle)) {
+      throw new ConfigError(
+        `APP_STORE_HANDLES handle for app ${appId} must be the slug from ` +
+          `apps.shopify.com/<handle>, got "${handle}".`,
+      );
+    }
+    handles[appId] = handle.toLowerCase();
+  }
+  return handles;
+}
+
+/**
  * The dashboard password, or null when the gate is off.
  *
  * A short password is worse than none, because it invites exposing the port on
@@ -134,6 +180,11 @@ export interface Config {
   scope: {
     appIds: string[];
     syncStartDate: string;
+    /**
+     * App id → App Store listing handle. Empty means review tracking is off,
+     * because there is no way to guess an app's listing slug from the API.
+     */
+    appStoreHandles: Record<string, string>;
   };
   runtime: {
     databasePath: string;
@@ -142,6 +193,15 @@ export interface Config {
     cacheTtlSeconds: number;
     /** Cadence of the background sync loop in `serve`. 0 disables it. */
     syncIntervalMinutes: number;
+    /**
+     * How often to walk every page of a listing rather than just the newest.
+     *
+     * Only a full walk can notice a review that is *gone*, and a full walk costs
+     * a request per ten reviews. A change in the listing's own review count
+     * forces one early regardless, so this is the ceiling on how long a removal
+     * can sit unnoticed while the count happens to stay level.
+     */
+    reviewSweepHours: number;
     /**
      * Whether a reverse proxy terminates TLS in front of this process.
      *
@@ -179,6 +239,7 @@ export function getConfig(): Config {
     scope: {
       appIds: appIds(),
       syncStartDate: isoDate('SYNC_START_DATE', '2015-01-01'),
+      appStoreHandles: appStoreHandles(),
     },
     runtime: {
       databasePath: databasePath(),
@@ -186,6 +247,7 @@ export function getConfig(): Config {
       timezone: timezone('REPORTING_TIMEZONE', 'UTC'),
       cacheTtlSeconds: int('CACHE_TTL_SECONDS', 600),
       syncIntervalMinutes: nonNegative('SYNC_INTERVAL_MINUTES', 5),
+      reviewSweepHours: nonNegative('REVIEW_SWEEP_HOURS', 24),
       trustProxy: bool('TRUST_PROXY', false),
     },
     reporting: {

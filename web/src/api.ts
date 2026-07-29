@@ -74,6 +74,8 @@ export interface QueryState {
   appId: string;
   includeUsage: boolean;
   includeTrials: boolean;
+  /** A single star rating for the review reports; 0 means every rating. */
+  rating: number;
 }
 
 /**
@@ -91,6 +93,7 @@ export function toSearchParams(query: QueryState): URLSearchParams {
   // honours the parameter, so an as-of reconstruction stays available to
   // anything calling the API directly.
   if (query.appId) params.set('appIds', query.appId);
+  if (query.rating) params.set('rating', String(query.rating));
   return params;
 }
 
@@ -241,7 +244,28 @@ export interface CustomerDetail {
   lastEventAt: string | null;
   subscriptions: CustomerSubscription[];
   events: CustomerEventRecord[];
-  apps: Array<{ appId: string; appName: string | null; installedAt: string | null }>;
+  /** Every app this merchant has ever had, paying or not. */
+  apps: CustomerApp[];
+}
+
+/** The whole relationship with one app, on one line. */
+export interface CustomerApp {
+  appId: string;
+  appName: string | null;
+  /** The listing, when one is mapped — the write-a-review link is built on it. */
+  listingUrl: string | null;
+  planName: string | null;
+  /** The price as billed: 299 on an annual plan, not the normalized 24.92. */
+  amount: number | null;
+  billingInterval: string | null;
+  currency: string | null;
+  /** Normalized monthly, and zero unless a subscription is live right now. */
+  mrr: number;
+  status: CustomerStatus;
+  since: string | null;
+  paymentCount: number;
+  paidGross: number;
+  review: ReviewSummary | null;
 }
 
 export const fetchCustomers = (options: {
@@ -268,6 +292,134 @@ export const fetchCustomer = (shopId: string, appId = ''): Promise<CustomerDetai
     `/api/customers/${encodeURIComponent(shopId)}${query ? `?${query}` : ''}`,
   );
 };
+
+/* --------------------------------------------------------------- reviews */
+
+export type ReviewMatchMethod = 'auto' | 'manual' | 'ambiguous' | 'none';
+
+export interface ReviewSummary {
+  reviewId: string;
+  appId: string;
+  appName: string | null;
+  rating: number;
+  postedOn: string;
+  body: string;
+  storeName: string;
+  country: string | null;
+  usageDuration: string | null;
+  replyBody: string | null;
+  replyOn: string | null;
+  permalink: string | null;
+  shopId: string | null;
+  shopName: string | null;
+  shopDomain: string | null;
+  matchMethod: ReviewMatchMethod;
+  priorRating: number | null;
+  editedAt: string | null;
+  /**
+   * When a sweep first found the review gone. Who removed it is not knowable —
+   * a Shopify purge, the merchant deleting it, and a closed store all present
+   * the same way — so the UI says "Removed" and nothing more.
+   */
+  removedAt: string | null;
+  firstSeenAt: string;
+}
+
+export interface ReviewListResult {
+  reviews: ReviewSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+  query: string;
+  totals: {
+    live: number;
+    removed: number;
+    unmatched: number;
+    averageRating: number | null;
+  };
+}
+
+export interface ReviewCandidate {
+  shopId: string;
+  name: string | null;
+  domain: string | null;
+  installedThisApp: boolean;
+}
+
+export const fetchReviews = (options: {
+  search?: string;
+  appId?: string;
+  rating?: number | null;
+  status?: string;
+  linked?: string;
+  sort?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<ReviewListResult> => {
+  const params = new URLSearchParams();
+  if (options.search) params.set('q', options.search);
+  if (options.appId) params.set('appIds', options.appId);
+  if (options.rating) params.set('rating', String(options.rating));
+  if (options.status && options.status !== 'all') params.set('status', options.status);
+  if (options.linked && options.linked !== 'all') params.set('linked', options.linked);
+  if (options.sort) params.set('sort', options.sort);
+  if (options.limit) params.set('limit', String(options.limit));
+  if (options.offset) params.set('offset', String(options.offset));
+  return getJson<ReviewListResult>(`/api/reviews?${params.toString()}`);
+};
+
+export const fetchReviewCandidates = (
+  reviewId: string,
+  search: string,
+): Promise<{ candidates: ReviewCandidate[] }> => {
+  const params = new URLSearchParams();
+  if (search) params.set('q', search);
+  return getJson<{ candidates: ReviewCandidate[] }>(
+    `/api/reviews/${encodeURIComponent(reviewId)}/candidates?${params.toString()}`,
+  );
+};
+
+/** Passing null unlinks, handing the review back to the automatic matcher. */
+export const linkReviewToShop = (
+  reviewId: string,
+  shopId: string | null,
+): Promise<{ ok: boolean; shopId: string | null; matchMethod: ReviewMatchMethod }> =>
+  sendJson('PUT', `/api/reviews/${encodeURIComponent(reviewId)}/shop`, { shopId });
+
+/* -------------------------------------------------------- app listings */
+
+export interface AppListing {
+  appId: string;
+  appName: string | null;
+  handle: string;
+  url: string;
+  /** 'config' means it came from APP_STORE_HANDLES rather than from this page. */
+  source: 'manual' | 'config';
+  /** The listing's own title, from the last check. */
+  listingName: string | null;
+  checkedAt: string | null;
+  lastError: string | null;
+  reviewCount: number;
+}
+
+export interface ListingSettings {
+  listings: AppListing[];
+  /** Apps in reporting scope, for the "which app is this?" picker. */
+  apps: Array<{ id: string; name: string }>;
+}
+
+export const fetchListings = (): Promise<ListingSettings> =>
+  getJson<ListingSettings>('/api/listings');
+
+export const saveListing = (appId: string, url: string): Promise<AppListing> =>
+  sendJson('PUT', `/api/listings/${encodeURIComponent(appId)}`, { url });
+
+export const deleteListing = (appId: string): Promise<void> =>
+  sendJson('DELETE', `/api/listings/${encodeURIComponent(appId)}`);
+
+/** Fetches the listing and reports what is actually at that URL. */
+export const checkListing = (appId: string): Promise<AppListing> =>
+  sendJson('POST', `/api/listings/${encodeURIComponent(appId)}/check`);
 
 /* --------------------------------------------------------- notifications */
 

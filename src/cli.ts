@@ -99,6 +99,14 @@ async function main(): Promise<void> {
           `${result.customerEvents} customer event(s).`,
       );
 
+      if (result.reviews.apps.length > 0) {
+        console.log(
+          `Reviews: ${result.reviews.added} new, ${result.reviews.updated} edited, ` +
+            `${result.reviews.removed} no longer on the listing ` +
+            `(${result.reviews.swept.length} listing(s) walked in full).`,
+        );
+      }
+
       // `serve` notifies from its own loop. Doing it here too is what keeps a
       // cron-driven `partnerdex sync` — the setup you get with
       // SYNC_INTERVAL_MINUTES=0 — from going quiet. The delivery ledger is
@@ -121,7 +129,8 @@ async function main(): Promise<void> {
       console.log(
         `Rebuilt in ${Math.round((Date.now() - started) / 1000)}s: ` +
           `${result.subscriptions} subscription(s), ${result.installs} install interval(s), ` +
-          `${result.customerEvents} customer event(s).`,
+          `${result.customerEvents} customer event(s), ` +
+          `${result.reviewEvents} review event(s).`,
       );
       break;
     }

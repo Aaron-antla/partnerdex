@@ -17,6 +17,7 @@ import {
   type TransactionNode,
 } from './ingest.js';
 import { rebuildDerivedTables } from './derive.js';
+import { syncReviews, type ReviewSyncResult } from '../appstore/ingest.js';
 
 /**
  * Transactions and events can be recorded slightly after they occur, so each
@@ -172,6 +173,8 @@ export interface SyncResult {
   subscriptions: number;
   installs: number;
   customerEvents: number;
+  reviewEvents: number;
+  reviews: ReviewSyncResult;
 }
 
 export async function runSync(options: SyncOptions = {}): Promise<SyncResult> {
@@ -212,8 +215,13 @@ export async function runSync(options: SyncOptions = {}): Promise<SyncResult> {
     events += await syncEventsFor(db, appId, options);
   }
 
+  // Before the rebuild, so a review that arrives this run is matched to a
+  // customer and compiled onto their timeline in the same pass rather than
+  // waiting out a sync.
+  const reviews = await syncReviews(db, { full: options.full, onProgress });
+
   onProgress('Rebuilding derived subscription and install indexes...');
   const derived = rebuildDerivedTables(db);
 
-  return { apps: appIds, transactions, events, ...derived };
+  return { apps: appIds, transactions, events, reviews, ...derived };
 }

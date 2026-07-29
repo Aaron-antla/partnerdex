@@ -22,6 +22,8 @@ export interface RawMetricQuery {
   includeUsage?: string;
   includeTrials?: string;
   byShop?: string;
+  /** A single star rating, 1-5. Only the review reports read it. */
+  rating?: string;
   nocache?: string;
 }
 
@@ -46,6 +48,14 @@ export interface MetricContext {
   currency: string | null;
   /** Visible buckets preceded by the hidden leading bucket. */
   bucketsWithLead: Window['buckets'];
+  /**
+   * Narrow the review reports to one star rating. Null means every rating.
+   *
+   * Deliberately not part of `asOf`: that predicate decides which subscriptions
+   * were live at an instant and is shared by every money report, and a rating
+   * has no business being anywhere near it.
+   */
+  rating: number | null;
 }
 
 /**
@@ -131,5 +141,16 @@ export function buildContext(query: RawMetricQuery, now?: Date): MetricContext {
     planChangeWindowDays: reporting.planChangeWindowDays,
     currency,
     bucketsWithLead: [window.leading, ...window.buckets],
+    rating: ratingFilter(query.rating),
   };
+}
+
+/** A star rating to narrow the review reports to, or null for all of them. */
+function ratingFilter(raw: string | undefined): number | null {
+  if (raw === undefined || raw === '' || raw === '0') return null;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 5) {
+    throw new MetricRequestError(`rating must be a whole number from 1 to 5, got "${raw}".`);
+  }
+  return value;
 }

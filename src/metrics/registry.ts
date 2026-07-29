@@ -22,6 +22,12 @@ import {
 } from './reports/subscribers.js';
 import { onTrialReport, trialConversionReport, trialsReport } from './reports/trials.js';
 import { arpuReport, ltvReport } from './reports/unitEconomics.js';
+import {
+  reviewsAverageRatingReport,
+  reviewsLiveReport,
+  reviewsPostedReport,
+  reviewsRemovedReport,
+} from './reports/reviews.js';
 
 /**
  * The single front door. Both the HTTP API and the CLI dispatch through here,
@@ -150,6 +156,30 @@ export const METRICS: MetricDefinition[] = [
     description:
       'Uninstalls net of reinstalls in the rolling window over the installs active at its start.',
     run: logoChurnReport,
+  },
+  {
+    key: 'reviews_posted',
+    label: 'Reviews',
+    description: 'Reviews posted to your App Store listing in each bucket, split by rating.',
+    run: reviewsPostedReport,
+  },
+  {
+    key: 'reviews_live',
+    label: 'Reviews on the listing',
+    description: 'Reviews live on the listing as-of each bucket.',
+    run: reviewsLiveReport,
+  },
+  {
+    key: 'reviews_average_rating',
+    label: 'Average rating',
+    description: 'Mean rating of the reviews live as-of each bucket.',
+    run: reviewsAverageRatingReport,
+  },
+  {
+    key: 'reviews_removed',
+    label: 'Reviews removed',
+    description: 'Reviews that stopped appearing on the listing in each bucket.',
+    run: reviewsRemovedReport,
   },
 ];
 

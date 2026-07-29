@@ -35,13 +35,29 @@ export interface PageSpec {
   blurb: string;
   cards: CardSpec[];
   /**
-   * Metric pages are a grid of cards over a shared time window. The other two
-   * are different shapes entirely — a searchable population, and a settings
-   * form — so they opt out of the window controls rather than showing filters
-   * that would not apply to them.
+   * Metric pages are a grid of cards over a shared time window. Customers and
+   * notifications are different shapes entirely — a searchable population, and
+   * a settings form — so they opt out of the window controls rather than
+   * showing filters that would not apply to them.
+   *
+   * Reviews is the one page that is both: cards over the shared window, and a
+   * searchable list of the documents behind them.
    */
-  kind?: 'metrics' | 'customers' | 'notifications';
+  kind?: 'metrics' | 'customers' | 'notifications' | 'reviews' | 'listings';
+  /**
+   * Which shared filters this page shows, in order.
+   *
+   * Declared rather than assumed because they are not universally meaningful:
+   * "Trials in MRR" changes nothing on a page about App Store reviews, and a
+   * rating filter changes nothing anywhere else.
+   */
+  filters?: PageFilter[];
 }
+
+export type PageFilter = 'app' | 'range' | 'trials' | 'rating';
+
+/** What a metric page shows when it has not asked for anything different. */
+export const DEFAULT_FILTERS: PageFilter[] = ['app', 'range', 'trials'];
 
 export interface NavGroup {
   label: string;
@@ -217,6 +233,57 @@ const CUSTOMERS: PageSpec = {
   cards: [],
 };
 
+const REVIEWS: PageSpec = {
+  id: 'reviews',
+  label: 'Reviews',
+  title: 'Reviews',
+  blurb:
+    'Everything on your App Store listing, and everything that used to be.',
+  kind: 'reviews',
+  cards: [
+    {
+      metric: 'reviews_live',
+      label: 'Reviews on the listing',
+      subtitle: 'Live at each point, removals taken off.',
+      plot: 'line',
+    },
+    {
+      metric: 'reviews_average_rating',
+      label: 'Average rating',
+      subtitle: 'Mean of the reviews live at each point.',
+      plot: 'line',
+    },
+    {
+      metric: 'reviews_removed',
+      label: 'Removed',
+      subtitle: 'Deleted / purged from the listing.',
+      plot: 'bar',
+      tone: 'churn',
+      invertDelta: true,
+    },
+    {
+      metric: 'reviews_posted',
+      label: 'New reviews',
+      subtitle: 'Posted in the period.',
+      plot: 'bar',
+      full: true,
+    },
+  ],
+  // Trials have nothing to do with a listing. The rating filter takes the slot
+  // and reaches every card, so the whole page can be read one star at a time.
+  filters: ['app', 'range', 'rating'],
+};
+
+const LISTINGS: PageSpec = {
+  id: 'listings',
+  label: 'App listings',
+  title: 'App listings',
+  blurb:
+    'Which App Store page belongs to which of your apps.',
+  kind: 'listings',
+  cards: [],
+};
+
 const NOTIFICATIONS: PageSpec = {
   id: 'notifications',
   label: 'Notifications',
@@ -228,8 +295,8 @@ const NOTIFICATIONS: PageSpec = {
 
 export const NAV: NavGroup[] = [
   { label: '', pages: [OVERVIEW, CUSTOMERS] },
-  { label: 'Reports', pages: [REVENUE, SUBSCRIPTIONS, CHURN] },
-  { label: 'Settings', pages: [NOTIFICATIONS] },
+  { label: 'Reports', pages: [REVENUE, SUBSCRIPTIONS, CHURN, REVIEWS] },
+  { label: 'Settings', pages: [LISTINGS, NOTIFICATIONS] },
 ];
 
 export const PAGES: PageSpec[] = NAV.flatMap((group) => group.pages);

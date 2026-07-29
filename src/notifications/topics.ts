@@ -38,6 +38,13 @@ export const EVENT_PRESENTATION: Record<string, EventPresentation> = {
   unsubscribed: { headline: 'Subscription cancelled', emoji: ':wave:', tone: 'bad' },
   subscription_frozen: { headline: 'Subscription frozen', emoji: ':snowflake:', tone: 'bad' },
   subscription_unfrozen: { headline: 'Subscription unfrozen', emoji: ':sunny:', tone: 'good' },
+
+  // Reviews are the one family whose tone is not fixed by the event type — a new
+  // review is excellent or awful depending on a number the type does not carry —
+  // so these are the defaults and `slack.ts` re-reads the rating over the top.
+  review_posted: { headline: 'New review', emoji: ':star:', tone: 'neutral' },
+  review_edited: { headline: 'Review edited', emoji: ':pencil2:', tone: 'neutral' },
+  review_removed: { headline: 'Review removed', emoji: ':ghost:', tone: 'neutral' },
 };
 
 export interface NotificationTopic {
@@ -75,7 +82,29 @@ export const APP_SUBSCRIPTION_EVENTS: NotificationTopic = {
   ],
 };
 
-export const TOPICS: NotificationTopic[] = [APP_SUBSCRIPTION_EVENTS];
+/**
+ * Reviews, which the Partner API knows nothing about.
+ *
+ * The removal line is worded the way it is on purpose. A review that vanishes
+ * from the listing could have been purged by Shopify, deleted by the merchant,
+ * or taken down with a closed store, and the page shows the same nothing in all
+ * three cases. Promising "Shopify removed a review" in a toggle description
+ * would be committing to a distinction we cannot observe.
+ */
+export const APP_REVIEW_EVENTS: NotificationTopic = {
+  key: 'app_review_events',
+  label: 'App Store Reviews',
+  description:
+    'Reviews appearing on your App Store listing, being rewritten by the merchant, or disappearing from it.',
+  eventTypes: ['review_posted', 'review_edited', 'review_removed'],
+  covers: [
+    'New review posted',
+    'Review edited by the merchant (including a changed rating)',
+    'Review no longer on the listing',
+  ],
+};
+
+export const TOPICS: NotificationTopic[] = [APP_SUBSCRIPTION_EVENTS, APP_REVIEW_EVENTS];
 
 export function topicByKey(key: string): NotificationTopic | undefined {
   return TOPICS.find((topic) => topic.key === key);
