@@ -1,527 +1,181 @@
 # PartnerDex
 
-Self-hosted analytics for your Shopify apps. Pulls your Partner API history into
-a local SQLite store and reconstructs **MRR, ARR, gross earnings, ARPU, LTV,
-trials, churn, and active subscribers as of any past date**.
+Self-hosted analytics for your Shopify apps. Pulls your Partner API history into a local SQLite store and reconstructs **MRR, ARR, gross earnings, ARPU, LTV, trials, churn, and active subscribers as of any past date**.
 
-Nothing leaves your machine, and no app ids, app names, or organization ids live
-in the code — everything is configuration.
+Nothing leaves your machine, and no app IDs, app names, or organization IDs live in the code — everything is configuration.
 
 <!-- Add a screenshot here once you have one you're happy with. -->
 
-## Why "as of any past date"
+---
 
-There are no snapshot tables. Every point in every series is rebuilt from the
-raw event history by asking *"which subscriptions were live at this instant?"*.
+## 1. Introduction
 
-Two things follow. Asking for MRR on 2024-06-30 gives the same number whether
-you ask today or asked back then. And when a cancellation lands late, or a
-refund is issued against an old charge, every affected point in history corrects
-itself on the next sync — no backfill job.
+PartnerDex provides a privacy-first, fully customizable, self-hosted analytics dashboard designed specifically for Shopify app developers. Instead of relying on external services or static pre-computed snapshots, PartnerDex builds its entire reporting suite directly from raw event history. Every historical point in every timeseries is reconstructed dynamically by determining subscription statuses at that specific instant.
 
-## Requirements
+### Key Features
+- **Deterministic Historical Metrics:** MRR, ARR, and subscriber counts as of any past date remain perfectly consistent. Late-arriving cancellations or retroactively issued refunds automatically correct historical calculations on the subsequent sync.
+- **Self-Hosted & Private:** All fetched data is stored in a local SQLite database on your own infrastructure. No third-party servers are involved.
+- **Comprehensive Lifecycle Insights:** Reconstructs detailed customer lifecycles, uninstall timelines, trials, churn, App Store reviews, and revenue analytics.
+- **Slack Notifications:** Real-time, deduplicated alerts for subscription events (starts, upgrades, churn) and App Store review changes.
+- **CLI & HTTP API:** Query metrics directly from the command line, export custom intervals, or connect your own reporting tools.
 
-- Node 20+
-- A Shopify Partner API client with the **View financials** and **Manage apps**
-  permissions (Partners Dashboard → Settings → Partner API clients)
+---
 
-## Setup locally
+## 2. Get started locally
 
+### Prerequisites
+- Node.js 20+
+- A Shopify Partner API client with **View financials** and **Manage apps** permissions (located in the Shopify Partners Dashboard → Settings → Partner API clients).
+
+### Setup and Installation
+
+1. **Clone the repository and install dependencies:**
+   ```bash
+   npm install
+   ```
+
+2. **Configure environment variables:**
+   ```bash
+   cp .env.example .env
+   ```
+   Fill in the following variables in `.env`:
+   - `PARTNER_API_TOKEN`: The access token of your Partner API client.
+   - `PARTNER_ORGANIZATION_ID`: Your Shopify Partners Dashboard Organization ID (found in the URL: `partners.shopify.com/<id>/...`).
+   - `PARTNER_API_VERSION`: A supported Shopify API version (e.g., `2026-07`).
+   - `DASHBOARD_PASSWORD`: Set a password (at least 8 characters) to secure the dashboard. If left empty, no login is required (localhost default).
+
+3. **Verify API connectivity and pull your history:**
+   - Run the diagnostic utility to verify setup:
+     ```bash
+     npm run doctor
+     ```
+   - Sync your historical data:
+     ```bash
+     npm run sync
+     ```
+     *Note: The first sync backfills historical data starting from `SYNC_START_DATE` and may take a few minutes. Subsequent syncs are incremental and fast.*
+
+4. **Build and start the application:**
+   ```bash
+   npm run build
+   npm start
+   ```
+   Open your browser and navigate to `http://localhost:8787`.
+
+### Local Development
+To run the server with hot-reloading for both the API and the frontend dashboard (using Vite):
 ```bash
-npm install
-cp .env.example .env   # then fill it in
+npm run dev
 ```
 
-`.env` needs three values to start:
-
-| Variable | Where to find it |
-|---|---|
-| `PARTNER_API_TOKEN` | The access token of your Partner API client |
-| `PARTNER_ORGANIZATION_ID` | The number in your Partners Dashboard URL: `partners.shopify.com/<this>/...` |
-| `PARTNER_API_VERSION` | A supported version, e.g. `2026-07` |
-
-Set `DASHBOARD_PASSWORD` too if anything but you can reach the port — see
-[Locking the dashboard](#locking-the-dashboard).
-
-Check it works, then pull your history:
-
+### Running Tests
+To run the automated test suite:
 ```bash
-npm run doctor
+npm test
 ```
 
-```bash
-npm run sync
-```
+---
 
-The first sync backfills from `SYNC_START_DATE` and can take a few minutes on a
-large account. Later runs are incremental — they resume from a stored watermark
-and re-read a short overlap to catch late-arriving records. Re-running is always
-safe; every insert is idempotent.
+## 3. Deploy on production
 
-```bash
-npm run build && npm start
-```
+PartnerDex is designed to run as a single-node process on a single machine with a persistent volume for the SQLite database.
 
-Then open <http://localhost:8787>.
+For quick and easy production deployment using Fly.io, refer to the detailed guide in [DEPLOY.md](DEPLOY.md).
 
-`serve` keeps the store current on its own: it syncs every five minutes in the
-background, and the dashboard picks up each run without a reload. Set
-`SYNC_INTERVAL_MINUTES=0` to turn the loop off and drive syncing yourself.
+---
 
-Runs never overlap — the next is scheduled once the previous finishes, so a sync
-that outlives its interval delays the next tick rather than stacking against it.
-A failing run backs off geometrically to a ceiling of 30 minutes, and the
-dashboard says so in the footer rather than letting the timestamp drift quietly.
-Restarting the server resumes the cadence instead of restarting it, so a
-`tsx watch` session does not turn every file save into a Partner API pass.
+## 4. Details and customizations
 
-The dashboard is six pages behind a collapsible rail — **Overview**,
-**Customers**, a **Reports** group holding **Revenue**, **Subscriptions** and
-**Churn**, and **Notifications** under **Settings**. Each report page is a grid of at most three cards per row, and
-each card is one metric read four ways: what it is, what it is now, how that
-compares with the period before, and how it got there. The page id lives in the
-URL hash, so a report — or a single merchant — can be linked.
+### Sync Cadence
+When running `npm start`, the background loop syncs the SQLite database every 5 minutes by default.
+- You can change this interval by setting `SYNC_INTERVAL_MINUTES` in your `.env`. Set it to `0` to disable background syncing and run syncs manually.
+- Failed syncs implement a geometric backoff up to a maximum of 30 minutes, with the status reported in the dashboard footer.
+- Sync operations are designed with file locking to ensure runs never overlap.
 
-For development with hot reload, `npm run dev` runs the API and the Vite dev
-server together.
+### Scope and Filtering (Choosing Apps)
+To configure which Shopify apps are included in the reports, set the `PARTNER_APP_IDS` variable in `.env`:
+- **When set:** Includes only the comma-separated list of specified Shopify App IDs. Useful for separating production apps from development or test instances.
+- **When empty:** Automatically resolves to every app that has ever appeared on a transaction.
+- *Note: Test charges and test shops are automatically excluded from metrics.*
 
-## Locking the dashboard
+### Dashboard Security and Lockout
+If `DASHBOARD_PASSWORD` is configured (minimum 8 characters), the application secures the web UI and JSON endpoints behind a cookie-based login.
+- **Session Lifetimes:** Selecting "Remember me" creates a persistent cookie lasting 30 days. Otherwise, the session expires in 12 hours or when the browser closes.
+- **Throttling:** Brute-force protection locks out client IPs for 1 minute after 5 failed login attempts, with increasing delays for subsequent attempts.
+- **SSL/TLS:** The auth mechanism relies on plain HTTP cookies for simplicity. Always terminate TLS/SSL in front of PartnerDex when deploying to an untrusted network.
 
-Set `DASHBOARD_PASSWORD` in `.env` (8 characters or more) and both the dashboard
-and the API behind it require a login:
-
-```
-DASHBOARD_PASSWORD=something-only-you-know
-```
-
-Leave it empty and there is no login at all, which is the localhost default this
-tool has always had. There are no accounts — one password, one operator.
-
-Signing in sets an HTTP-only cookie holding a signed expiry and nothing else, so
-there is no session table and a restart does not sign you out. **Remember me**
-chooses between the two lifetimes: unticked, the cookie dies with the browser
-and is good for 12 hours; ticked, it lasts 30 days. **Sign out** sits at the foot
-of the navigation rail and clears it. A session that lapses while the page is
-open returns you to the login form on its next request rather than leaving stale
-figures on screen.
-
-Two consequences worth knowing:
-
-- **Changing the password signs everyone out.** The cookie is signed with a key
-  derived from the password, so every cookie issued under the old one stops
-  verifying. That is the way to revoke a session you cannot reach.
-- **Failed logins are throttled** — five wrong attempts locks that client out for
-  a minute, and each further attempt lengthens it. The lockout applies to the
-  correct password too, which is what makes it a lockout.
-
-`GET /api/health` stays open, because a liveness probe that needs a password is
-not a liveness probe. Everything that reads your data does not.
-
-This is a password on a door, not a security boundary: cookies travel in the
-clear over plain HTTP, so put TLS in front of the port before exposing it to a
-network you do not control.
-
-## Choosing which apps count
-
-The Partner API has no "list my apps" query, so scope is resolved one of two
-ways:
-
-- **`PARTNER_APP_IDS` is set** — exactly those apps. This is how you keep
-  development and test apps out of production reporting, and it keeps your app
-  ids in `.env` rather than in the repo.
-- **`PARTNER_APP_IDS` is empty** — every app that has appeared on a transaction.
-  A brand-new app with no charges yet is invisible until its first sale; name it
-  explicitly if you need it sooner.
-
-Test charges and test shops are always excluded.
-
-## What each number means
-
-Definitions are the part that makes analytics trustworthy or not, so they are
-stated rather than implied.
+### Metric Definitions
 
 | Metric | Definition |
 |---|---|
-| **MRR** | Sum of normalized monthly amounts over subscriptions live at that instant. Annual plans contribute 1/12 of their price; 30-day plans contribute their price unchanged. A subscription counts from its **first paid charge**, not its activation — a trial is live but worth nothing. Frozen subscriptions contribute zero. |
-| **ARR** | Latest MRR × 12. A run rate, with no growth or seasonality modelling. |
-| **Gross earnings** | What merchants actually paid inside each period, from the transactions feed: subscription, one-time, and usage charges, less refunds and credits. Before Shopify's revenue share — the net figure rides along in `meta.netEarnings`. |
-| **ARPU** | MRR ÷ active paying population. `METRICS_BY_SHOP` decides whether that population is subscribers or individual subscriptions. |
-| **LTV** | ARPU ÷ monthly churn rate. Instantaneous and forward-looking — what today's cohort is worth if today's churn held forever. Not a cohort measurement of realized revenue. Directional only. |
-| **MRR growth** | Percentage change in MRR against the previous bucket. The headline is the whole window: MRR at the end against MRR at the start. A bucket whose predecessor was zero reports 0, not infinity, and the count of those is in `meta`. |
-| **MRR contribution by app** | The same MRR reconstruction with one more `GROUP BY`, so the per-app bands sum to the total by construction. Beyond four apps the tail folds into "Other" rather than inventing a fifth colour. |
-| **Trials** | Grouped by the period the trial began, split into converted and cancelled. |
-| **On trial** | Trials running at that instant — started, and neither converted nor cancelled yet. `Trials` is the flow that feeds this stock. Trials whose outcome was never recorded have no end instant to test and are excluded. |
-| **New subscriptions** | Subscriptions that started paying inside each period, excluding plan changes. The inflow to the ledger churn reads the outflow of, gated on the same instant, so a bucket's net movement is new minus churned. |
-| **Subscription growth** | Percentage change in live subscriptions, derived the same way as MRR growth. |
-| **Churn** | Rolling 30-day rate. The denominator is the population live at the **start** of the window, never the end. |
-| **Revenue / subscription churn** | The same loss over two denominators: MRR lost, contracts lost. Revenue churn runs above subscription churn when the customers leaving are the expensive ones. |
-| **Logo churn** | Uninstalls net of reinstalls over the installs active at the window start — the only churn rate read from the install ledger rather than the subscription index. It counts free installs, so it usually sits well below the other two, and a shop that cancels but leaves the app installed is not a lost logo until it uninstalls. A deactivation counts as an uninstall, a reactivation as a return, so the rate can go negative in a month when returns outrun departures. |
-| **Subscribers** | Shop-and-app pairs with a live paid subscription. A merchant running two of your apps counts twice, matching how each app reports its own numbers — and so that dropping one app registers as churn instead of hiding behind the other. |
-| **Active subscriptions / installs** | Live counts at that instant. Installs counts every shop with the app, paying or not. |
+| **MRR** | Normalized monthly amounts of live paid subscriptions. Annual plans contribute 1/12 of their price; 30-day plans contribute their full price. Active trials contribute zero until the first paid charge settles. Frozen subscriptions contribute zero. |
+| **ARR** | MRR × 12. Represents an instantaneous run rate. |
+| **Gross earnings** | Actual cash collected inside the period, less refunds and credits. Includes subscription, one-time, and usage charges. Before Shopify's revenue share. |
+| **ARPU** | MRR divided by active paying population. `METRICS_BY_SHOP` determines whether population is counted by subscribers or individual subscriptions. |
+| **LTV** | ARPU divided by the monthly subscription churn rate. Represents an instantaneous, forward-looking cohort value. |
+| **MRR growth** | Percentage change in MRR compared to the start of the period. |
+| **MRR contribution by app** | MRR split by app. If there are more than four apps, the tail is grouped under "Other". |
+| **Trials** | Count of trials started in the period, split into converted and cancelled. |
+| **On trial** | Instantaneous count of active trials at that exact point in time. |
+| **New subscriptions** | Subscriptions starting their first paid cycle in the period, excluding plan upgrades or downgrades. |
+| **Subscription growth** | Percentage change in live paid subscriptions over the period. |
+| **Churn** | Rolling 30-day loss rate. The denominator is the live population at the start of the window. |
+| **Revenue / subscription churn** | MRR lost versus subscription contracts lost. |
+| **Logo churn** | Uninstalls net of reinstalls divided by active installs at the start of the window. Includes free installs. |
+| **Subscribers** | Unique shop-and-app pairs with a live paid subscription. |
+| **Active subscriptions / installs** | Live counts at that instant. Installs includes all active merchant shops (paying and non-paying). |
 
-### Four inferences worth knowing about
+### Under-the-Hood Inferences
+1. **Inferred Trials:** Trial periods are detected based on the gap between subscription activation and the first paid charge transaction. `TRIAL_MIN_GAP_DAYS` (default `2`) defines this threshold.
+2. **Billing Dates as Fallbacks:** Late-settling payout transactions are accounted for dynamically. Subscriptions with active billing dates that have not received cancellation events are assumed active to prevent artificial drops.
+3. **Plan Upgrades/Downgrades:** Shopify models plan changes by cancelling the old subscription and creating a new one. PartnerDex correlates these events within `PLAN_CHANGE_WINDOW_DAYS` to avoid reporting upgrades as churn.
 
-**Trials are inferred.** The Partner API does not report trial length. A trial is
-detected from the gap between a subscription activating and its first paid
-charge landing: no gap means the merchant paid immediately, a gap means they
-were trialling. `TRIAL_MIN_GAP_DAYS` (default 2) sets the threshold and also
-absorbs the lag between a charge and its transaction being recorded.
+### Customer Lifecycles and Events
+The Partner API event stream is compiled into a high-level customer lifecycle state machine in the `customer_events` table:
+- **Account:** `installed`, `reinstalled`, `uninstalled`, `deactivated`, `reactivated`
+- **Subscription:** `subscribed`, `resubscribed`, `upgraded`, `downgraded`, `unsubscribed`, `subscription_frozen`, `subscription_unfrozen`, `charge_abandoned`
+- **Trial:** `trial_started`, `trial_converted`, `trial_expired`
+- **Money:** `payment`, `refund`
 
-**`billingOn` is the next billing date, not the trial end.** The same field means
-three different things, and only the first is a trial:
+The delta change in monthly MRR is recorded in the `net_change` field, ensuring that the sum of all historical events perfectly matches the reconstructed state:
+$$\sum \text{net\_change} = \text{MRR reconstructed as of now}$$
 
-| Gap from activation to `billingOn` | Meaning |
-|---|---|
-| A part cycle (e.g. 14 of 30 days) | Trialling — earns nothing yet |
-| A full cycle (within a day of 30 or 365) | Billed at activation — paying |
-| Whatever remained of a paid cycle | Mid-cycle plan change — paying |
-
-A charge that replaces one ending at the same moment is a continuation, so it is
-never treated as a fresh trial. One ambiguity survives: a trial whose length
-equals the billing cycle (a 30-day trial on a 30-day plan) is indistinguishable
-from a charge billed at activation, and reads as paying.
-
-**Transactions settle late, so the billing date is a fallback.** Partner
-transactions carry the date they landed in a payout batch, not the date the
-merchant was charged, and payouts run twice a month. Two consequences are handled
-explicitly: a subscription whose billing date has passed with no cancellation
-counts as paying even before its transaction shows up (otherwise every shop that
-converted in the last fortnight reads as unpaid), and a sale posting within
-21 days of a cancellation is treated as settlement of the final charge rather
-than proof the subscription survived.
-
-**Plan changes are not churn.** Shopify models an upgrade as *cancel the old
-charge, create a new one*. Counting raw cancellations would report every upgrade
-as a lost customer. A cancellation followed by a new charge for the same shop
-within `PLAN_CHANGE_WINDOW_DAYS` is classified as a plan change and excluded
-from churn. An uninstall only ends a subscription when it is the uninstall the
-shop never returned from — merchants routinely uninstall and reinstall while
-their charge keeps billing.
-
-## Customer events
-
-The Partner API's event feed is a firehose of low-level facts, not a lifecycle.
-The same merchant action arrives as several events, an upgrade shows up as
-*cancel the old charge, activate a new one*, and nothing at all fires when a
-trial ends. Sync compiles that stream into the events a customer timeline and a
-churn number actually want, in `customer_events`:
-
-| Family | Types |
-|---|---|
-| Account | `installed`, `reinstalled`, `uninstalled`, `deactivated`, `reactivated` |
-| Subscription | `subscribed`, `resubscribed`, `upgraded`, `downgraded`, `unsubscribed`, `subscription_frozen`, `subscription_unfrozen`, `charge_abandoned` |
-| Trial | `trial_started`, `trial_converted`, `trial_expired` |
-| Money | `payment`, `refund` |
-
-The compiler is a per-install fold over one merged timeline: the raw feed plus
-the movements it never sends — a trial converting, a loss the merchant expressed
-by uninstalling. An activation cannot be classified in isolation, because
-whether it is a subscribe, a win-back, an upgrade or a downgrade depends on what
-the shop was paying a moment earlier.
-
-**A lone cancel is not churn.** Shopify models a plan change as cancel-then-
-activate, so the naive reading reports every upgrade as a lost customer. The
-verdict on which cancels were plan changes already exists — it is what the churn
-metrics read — so the compiler consumes it rather than deriving a second copy
-with its own window. That is the difference between a timeline and a chart that
-agree about a merchant and two that quietly don't. Suppressed cancels stay on
-the record and are filtered out of every default read.
-
-**`net_change` is the signed monthly MRR delta**, gated where MRR is gated: at
-the first paid charge, not at activation. A subscription that opens a trial
-carries a zero delta, and the money arrives on `trial_converted`. Annual plans
-contribute a twelfth of their price.
-
-Which means the two halves of this project have to agree:
-
-```
-sum(net_change)  ==  MRR reconstructed as-of now
-```
-
-The left side accumulates forward from events; the right rebuilds backwards from
-subscription state. `npm run validate` checks it per install (see below), and
-`npm test` asserts it against the MRR report itself.
-
-Re-deriving is cheap and safe — event ids are deterministic, so a rebuild
-converges rather than duplicating:
-
+You can rebuild the derived event tables from scratch at any time:
 ```bash
 npm run rebuild
 ```
 
-## Reviews
+### App Store Reviews Tracking
+Since the Partner API does not include review data, PartnerDex crawls the public Shopify App Store listing.
+- **Setup:** Map your apps to their listing URLs in the **App listings** settings page in the dashboard.
+- **Syncing:** Crawling is sequential, rate-limited, and obeys `robots.txt`. Gaps in reviews (indicating a deleted or removed review) are detected via daily deep sweeps (`REVIEW_SWEEP_HOURS`).
+- **Attribution:** Reviews are matched to customer database entries by unique installer store name. Unmatched reviews can be linked manually via the UI.
 
-The Partner API carries **no review data at all** — the `App` object exposes an
-id, a name, an api key and an event feed, and nothing about the listing that
-holds your reviews. So reviews are read from the public App Store listing page,
-which is server-rendered and gives each review a stable id.
+### Slack Notifications
+Configure an incoming Slack webhook under the **Notifications** tab to receive alerts for subscription and review changes.
+- **Subscription events:** Subscriptions started, restarted, upgraded, downgraded, frozen, and cancelled.
+- **Review events:** New reviews, updated ratings, and removals.
+- **Deduplication:** Alerts are tracked in `notification_deliveries` to ensure no notification is sent twice, even after full database rebuilds.
 
-It cannot tell you which listing an app is published under either, and an
-organization has many apps. So that mapping is something you enter: open
-**App listings** under Settings, pick an app, and paste the address of its App
-Store page. Anything from `https://apps.shopify.com/your-app` to the full URL
-with a `/reviews` path on the end works — only the handle is kept.
-
-**Check** fetches the listing and shows the app name it claims. Worth pressing
-once: a wrong URL costs nothing when you save it and surfaces days later as an
-app that mysteriously has no reviews.
-
-The mapping is stored in the database, not in configuration, so it survives
-restarts and is there for anything else the listing page can be made to tell us.
-`APP_STORE_HANDLES` still works as a seed for containers that come up on an
-empty volume — it fills in apps that have no listing yet, and never overwrites
-one entered in the dashboard.
-
-The **Reviews** page then reports how the listing is moving: how many reviews it
-carries, the average rating, what has been removed, and what arrived in the
-period — each reconstructible as of any past date, and all four filterable to a
-single star rating. The reviews themselves are read on the merchant's own
-customer page, beside everything else they have done.
-
-### Noticing a review that disappears
-
-New reviews are cheap to find: the newest page is one request, and the listing
-publishes its own review count, so most syncs cost nothing more than that.
-Noticing a review that is *gone* is not — absence is only visible by walking
-every page and finding a gap.
-
-So a **sweep** walks the whole listing, by default once a day
-(`REVIEW_SWEEP_HOURS`) and immediately whenever the published count disagrees
-with what we hold. A review it does not see is marked removed **only if the
-sweep can prove it saw everything**: every page fetched cleanly, walked through
-to the page with no "next", and coming back with a count consistent with the
-listing's own. Fail any of those and the run records what it found and concludes
-nothing about what it did not.
-
-The asymmetry is deliberate. A missed removal is caught by the next sweep. A
-false removal puts a **Removed** badge on a review that is sitting there in
-public, and nothing later takes it back.
-
-Nothing is ever deleted. A removed review keeps its rating, its text and its
-link to a customer, because once the listing drops it, this is the only copy
-that will ever exist again.
-
-> **The badge says "Removed", not "Purged".** Shopify taking a review down, the
-> merchant deleting their own, and the store closing all present as the same
-> absence. Naming one would be a guess.
-
-### Which customer left it
-
-Reviews publish the merchant's **store name** and never their myshopify domain,
-and PartnerDex keys customers on a Partner API shop id — so the link is a guess,
-and it is made conservatively. The search runs only against shops that actually
-installed that app, and only a *unique* name match is accepted; two installers
-sharing a name is recorded as ambiguous and left unlinked.
-
-Anything left over is worth fixing, because an unattributed review is a hole in
-every figure on the Reviews page: the charts count it, and no customer owns it.
-So the page says so, in a banner above the cards with the work attached — **Link
-manually** opens the unmatched reviews with a shop picker on each. A manual link
-is never overwritten by a later sync.
-
-### What you get
-
-- A rating against every app on a merchant's own page — click the stars to read
-  it, and where they have not left one, a link that opens the App Store's write-
-  a-review dialog for you to send them
-- Slack alerts for a new review, a rewritten one, and one that disappears —
-  switch on **App Store Reviews** on the Notifications page
-- `reviews_posted`, `reviews_live`, `reviews_average_rating` and
-  `reviews_removed`, reconstructed as-of any past date like every other metric
-
-Two things to know about that history. Post dates are published for every live
-review, so *posted* counts backfill completely. Removals before your first crawl
-are unknowable and simply are not in the store — `meta.removalsKnownFrom` on
-every review metric carries that horizon. And the average rating is computed
-from the stored rows rather than copied from the listing, so it can differ
-slightly from Shopify's published figure; theirs is kept alongside it in
-`meta.publishedRating` so the two can be compared rather than silently diverge.
-
-Crawling is sequential, spaced, and identifies itself. `apps.shopify.com/robots.txt`
-does not exclude listing or review paths.
-
-## Slack notifications
-
-The **Notifications** page turns the event stream above into messages. Add a
-Slack [incoming webhook](https://api.slack.com/messaging/webhooks), switch on
-**App Subscription Events**, and every change to what a merchant pays you
-arrives in the channel:
-
-| Reported as | Compiled from |
-|---|---|
-| Subscription started | `subscribed`, or `trial_started` when it opens with a free period |
-| Subscription restarted | `resubscribed` — a win-back, not a first sale |
-| Subscription upgraded / downgraded | `upgraded`, `downgraded` |
-| Subscription cancelled | `unsubscribed` |
-| Subscription frozen / unfrozen | `subscription_frozen`, `subscription_unfrozen` |
-
-Each message carries the shop and its myshopify domain, the app, the plan and
-its price, and the signed MRR movement. The price is the one the merchant is
-billed — a $299/year plan reads as `$299.00/yr`, with the normalized
-`+$24.92/mo` on the MRR line rather than in place of it.
-
-Messages are sent after each sync, so they land within a few minutes of the
-merchant action. `serve` does this from its background loop; `partnerdex sync`
-does it too, so a cron-driven setup with `SYNC_INTERVAL_MINUTES=0` still
-notifies.
-
-### Three rules that keep it trustworthy
-
-**Nothing is replayed.** A toggle records the instant you switched it on and
-only reports what happens after it. Otherwise enabling one would empty years of
-history into a channel. Switching a topic off and on again does the same thing
-deliberately: the quiet stretch stays quiet.
-
-**Nothing is said twice.** `customer_events` is dropped and rewritten on every
-sync, so "rows I have not seen" is every row, every time. What survives a
-rebuild is the event id — it is deterministic — so the ids already sent are
-recorded in `notification_deliveries` and checked before the next send. A
-rebuild converges rather than re-announcing your whole customer base.
-
-**An upgrade is not a cancellation.** Shopify models a plan change as *cancel
-the old charge, activate a new one*. The notifier reads the compiled events, not
-the raw feed, so the cancel half is already marked as not-churn and the move
-announces itself once, as an upgrade, with the plan it replaced.
-
-One more collapse happens at send time. A subscription that opens with a trial
-produces `subscribed` and `trial_started` at the same instant — both correct,
-and the ledger needs both — but it is one thing the merchant did, so it is one
-message.
-
-### Handling failures
-
-A webhook that times out or answers 5xx or 429 leaves its events pending and
-stops that channel's run, so messages keep arriving in the order they happened.
-A webhook Slack has revoked answers 404 forever, so those events are recorded as
-undeliverable instead of blocking everything behind them. Either way the page
-says what went wrong, and **Send a test** answers on the spot rather than
-leaving a broken webhook to be discovered by the first event it loses.
-
-A backlog is capped at 50 messages per channel per sync. The rest stay pending
-rather than being dropped.
-
-> **Webhook URLs are credentials** — anyone holding one can post into your
-> channel. They are stored in the local SQLite file and the API never reads one
-> back: every response identifies a channel by name and a masked hint. Treat
-> `data/partnerdex.db` accordingly.
-
-| Endpoint | Purpose |
-|---|---|
-| `GET /api/notifications` | Topics, and the channels with their toggles |
-| `POST /api/notifications/channels` | Add a channel: `{ name, webhookUrl }` |
-| `PATCH /api/notifications/channels/:id` | Rename, or point at a new webhook |
-| `DELETE /api/notifications/channels/:id` | Remove it, and its delivery ledger |
-| `PUT /api/notifications/channels/:id/topics/:topic` | `{ enabled }` |
-| `POST /api/notifications/channels/:id/test` | Send a test message |
-| `POST /api/notifications/dispatch` | Send what is owing now, without waiting for a sync |
-
-## Querying from the command line
-
+### Querying from the Command Line
+Use the built-in CLI to pull raw metrics:
 ```bash
+# Query MRR for the last 12 months in monthly intervals
 npx partnerdex query mrr --period=last_12_months --interval=month
-```
 
-```bash
+# Query MRR as it stood on a specific historical date
 npx partnerdex query mrr --period=last_12_months --asOf=2024-06-30
 ```
 
-`--asOf` anchors the whole window, so presets compose with it: *last 12 months,
-as it stood on that date*.
+### HTTP JSON API
+The server exposes several endpoints (requires session authentication if `DASHBOARD_PASSWORD` is set):
+- `GET /api/overview`: Retrieve configured metrics.
+- `GET /api/metrics/:metric`: Retrieve details and historical timeseries for a specific metric.
+- `GET /api/customers`: Search and list customer profiles and timelines.
+- `GET /api/reviews`: List reviews, ratings, and linking statuses.
+- `GET /api/status`: System counts, sync logs, and background worker state.
 
-## HTTP API
-
-| Endpoint | Purpose |
-|---|---|
-| `GET /api/auth/session` | Whether a login is required, and whether you have one |
-| `POST /api/auth/login` | `{ password, remember }` — sets the session cookie |
-| `POST /api/auth/logout` | Clears it |
-| `GET /api/metrics` | List available metrics |
-| `GET /api/metrics/:metric` | One metric |
-| `GET /api/overview` | A page's worth of metrics in one call; `metrics=a,b,c` selects them |
-| `GET /api/customers` | Merchant list; `q=` searches name and myshopify domain, with `sort`, `limit`, `offset` |
-| `GET /api/customers/:shopId` | One merchant: every app they have, lifetime money, charge history, event timeline |
-| `GET /api/listings` | Mapped App Store listings, and the apps that could have one |
-| `PUT /api/listings/:appId` | `{ url }` — maps an app to its listing; accepts any listing URL shape |
-| `DELETE /api/listings/:appId` | Unmaps it. Collected reviews are kept |
-| `POST /api/listings/:appId/check` | Fetches the listing and returns the app name it claims |
-| `GET /api/reviews` | Review list; `q=`, `rating`, `status=live\|removed`, `linked=matched\|unmatched`, `sort`, `limit`, `offset` |
-| `GET /api/reviews/:reviewId/candidates` | Shops offered when linking a review by hand |
-| `PUT /api/reviews/:reviewId/shop` | `{ shopId }` links it; `{ shopId: null }` unlinks and returns it to the matcher |
-| `GET /api/apps` | Apps in reporting scope |
-| `GET /api/status` | Row counts, last sync time, and the background loop's state under `sync` |
-
-Query parameters: `period`, `start`, `end`, `interval`, `appIds`,
-`includeAnnual`, `includeUsage`, `includeTrials`, `byShop`, `rating`, `nocache`.
-
-`rating` (1–5) narrows the four `reviews_*` metrics to a single star rating and
-is ignored by every other metric.
-
-`interval` overrides the automatic granularity. The dashboard never sends it:
-the ladder in `time.ts` picks **daily** buckets up to 90 days and **monthly**
-beyond, so the axis can never disagree with the figures beside it. `hour` and
-`week` remain available to API and CLI callers that ask for them.
-
-Every metric answers with the same envelope:
-
-```json
-{
-  "metric": "mrr",
-  "value": 12480.5,
-  "format": "money",
-  "currency": "USD",
-  "period": "last_12_months",
-  "periodStart": "2025-07-01T00:00:00.000Z",
-  "periodEnd": "2026-07-01T00:00:00.000Z",
-  "timeSeriesInterval": "month",
-  "timeSeries": [{ "value": 11900, "change": 340, "periodStart": "...", "periodEnd": "..." }],
-  "series": [{ "key": "monthly", "name": "Monthly plans", "data": [] }],
-  "comparison": {
-    "previousValue": 10960,
-    "change": 1520.5,
-    "changePercent": 13.87,
-    "periodStart": "2024-07-01T00:00:00.000Z",
-    "periodEnd": "2025-07-01T00:00:00.000Z"
-  }
-}
-```
-
-`value` is the **last point** for level metrics like MRR and the **sum** for flow
-metrics like gross earnings. The newest bucket is marked `provisional` — it is
-still filling.
-
-`comparison` re-runs the metric over the equal-length span immediately before
-the window, which is what makes "up 13.9% on the previous 12 months" a true
-statement rather than a comparison of the last two buckets. It is absent when
-that span would start before `SYNC_START_DATE`, and `changePercent` is `null`
-when the previous period was zero. Each metric therefore costs two
-reconstructions, which is why `/api/overview` takes a `metrics=` list.
-
-> **The API is unauthenticated until you set `DASHBOARD_PASSWORD`.** With it set,
-> every endpoint above needs the session cookie and answers 401 without one; see
-> [Locking the dashboard](#locking-the-dashboard). Either way it is built to run
-> on localhost — a password is not a substitute for TLS on a public port.
-
-## Trusting the numbers
-
-Because history is recomputed rather than stored, it can drift silently. `npm run
-validate` checks that it hasn't:
-
-- **Source ⇄ index** — re-derives each subscription's normalized amount from the
-  raw feeds and diffs it against the derived table.
-- **Cross-foot** — reconstructed MRR against a direct sum over the same rows.
-- **Event ledger** — the customer-event running balance against the MRR
-  reconstruction, per install. This is what catches a misclassified event: a
-  cancel wrongly read as churn, a plan change counted twice, a trial credited too
-  early. None of those break a query or fail a type; every one of them moves the
-  ledger. Compared per install rather than in total, because two opposite errors
-  sum to zero.
-- **Retroactive drift** — today's view of the last 90 days against the previous
-  run's. History is *allowed* to change; a silent change is worth knowing about.
-
-It exits non-zero on a high-severity finding, so it fits a cron job.
-
-## How it fits together
-
+### Codebase Organization
 ```
 Partner API ──┬── app.events ─────┐
               └── transactions ───┤
@@ -539,84 +193,28 @@ Partner API ──┬── app.events ─────┐
                       reports ──► HTTP API ──► dashboard
 ```
 
-`customer_events` sits downstream of `subscriptions` rather than beside it,
-which is what keeps the timeline and the churn chart telling the same story —
-and, since Slack reads the same table, what keeps a notification from
-announcing an upgrade as a lost customer.
+- `src/partner/`: GraphQL client and API integration.
+- `src/sync/`: Ingestion, pagination, and write-time normalization.
+- `src/metrics/`: Core metric reports and timeseries range calculations.
+- `src/appstore/`: Web scraper for App Store listings and reviews.
+- `src/notifications/`: Slack webhook dispatcher and templates.
+- `web/`: Frontend dashboard single page application (Vite/React).
 
-| Path | What lives there |
-|---|---|
-| `src/partner/` | GraphQL documents and a retrying, throttle-aware client |
-| `src/sync/` | Pagination, ingest, and the write-time normalization in `derive.ts` |
-| `src/sync/events.ts` | The raw feed compiled into clean lifecycle events |
-| `src/customers/` | The customer read model, computed at read time |
-| `src/appstore/` | The listing map, and the crawl and parse behind reviews |
-| `src/reviews/` | The review read model |
-| `src/notifications/` | Topics, channels, Slack rendering, and the at-most-once dispatcher |
-| `src/metrics/asof.ts` | The as-of predicate — defined once, used by every report *and* the validators |
-| `src/metrics/time.ts` | Period parsing and the single range→interval ladder |
-| `src/metrics/reports/` | One module per metric family |
-| `src/validate.ts` | The trust checks |
-| `web/` | The dashboard |
-
-Two design rules are worth preserving if you extend this:
-
-1. **Normalize at write time, compare at read time.** Cadence and discount
-   handling belong in `derive.ts`. Read-time queries should stay sums and date
-   comparisons.
-2. **One as-of predicate.** If a report needs "who was live at D", it calls
-   `asOfPredicate`. A second copy is how a count and a revenue figure start
-   disagreeing about the same instant.
-
-## Limitations
-
-- **Single currency.** Amounts are summed as-is. If your payouts span
-  currencies, the reports will add unlike units together.
-- **No revenue-share modelling.** `netAmount` is taken from the API rather than
-  recomputed, so the threshold where Shopify's share changes is already baked in.
-- **Installs predating `SYNC_START_DATE`** have no datable start and are
-  excluded from the active-installs series.
-- **Subscriptions activated before September 2020** fall back to their activation
-  date as the MRR gate, because transactions from before then carry no charge id.
-- **LTV is directional.** Buckets with zero churn have no finite LTV and report
-  as 0; the count is in `meta.bucketsWithoutChurn`.
-- **Reviews come from an unversioned page.** Parsing keys on the listing's
-  accessibility and data attributes rather than its layout classes, but Shopify
-  owes no compatibility here. A review whose rating cannot be read is skipped
-  rather than guessed at, so a redesign shows up as reviews going missing, not
-  as wrong ratings.
-- **Who removed a review is not knowable**, and neither is any removal that
-  happened before your first crawl.
-- **A review is matched to a customer by store name**, which is a guess. Only a
-  unique match among that app's installers is accepted; the rest are left for
-  you to link by hand.
-
-## Testing
-
+### Database Validation and Integrity
+Run the built-in integrity validator to cross-examine and reconcile internal datasets:
 ```bash
-npm test
+npm run validate
 ```
+This utility checks source transaction parity, cross-foots reconstructed metrics against database sums, and detects retroactive history drift.
 
-The suite covers the behaviours that are easy to get wrong: cadence
-normalization, the as-of gate and its boundaries, backdated cancellations
-rewriting history, frozen subscriptions, trial classification, churn
-denominators, plan changes, guarded divisions, and scope enforcement.
+### Limitations
+- **Single Currency:** Transactions are summed as-is. Mixed currency billing is not converted.
+- **App Store Redesigns:** The review crawler parses raw HTML. Structural modifications by Shopify can affect review collection.
+- **Store Name Matching:** Matching App Store review authors with Shopify merchants is a best-effort heuristic based on store names.
+- **LTV Calculation:** Periods with zero churn will report an LTV of zero.
 
-For the event compiler it walks the cases that produce phantom churn or MRR
-drift when they are handled wrongly — a mid-cycle upgrade emitting one move and
-zero churn, a trial's money waiting for its first paid charge, a merchant who
-uninstalled rather than cancelled being counted as lost exactly once, a win-back
-reading as a win-back — and closes with the ledger reconciling against the MRR
-report.
-
-## Deploying to production
-
-PartnerDex is built to deploy on Fly.io as a single node process. See [DEPLOY](DEPLOY.md) for exact steps.
+---
 
 ## License
 
-PartnerDex is licensed under the GNU General Public License v3.0.
-
-The goal is to build a community-owned toolkit for Shopify app developers that remains free and open for everyone.
-
-See the [LICENSE](LICENSE) file for details.
+PartnerDex is licensed under the GNU General Public License v3.0. See the [LICENSE](LICENSE) file for details.
