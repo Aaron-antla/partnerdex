@@ -19,6 +19,30 @@ import { resolveScopedAppIds } from '../sync/index.js';
  * coincidence.
  */
 
+/**
+ * Where an event sits on the timeline, which is not always when it is stamped.
+ *
+ * A review carries the day the App Store published it and no time — the listing
+ * never shows one — so it is stored at that day's midnight. On a timeline that
+ * reads as 00:00, which puts it ahead of every event that day whose time *is*
+ * known: a merchant who installed at 09:15 and reviewed that afternoon appears
+ * to have reviewed an app they had not installed yet.
+ *
+ * Sorting it to the end of its own day is the one placement that cannot be
+ * wrong in that way. A review can only follow the install that made it
+ * possible, so within a day the position is a deduction rather than a guess.
+ * Where it truly sits among that day's other events is unknowable, and nothing
+ * here pretends otherwise: `occurred_at` still holds midnight, the UI still
+ * shows a date without a time, and only the ordering is decided here.
+ *
+ * String arithmetic rather than SQLite's `datetime()`, which would return
+ * `YYYY-MM-DD HH:MM:SS` and stop comparing lexically against the ISO instants
+ * every other row holds.
+ */
+const TIMELINE_ORDER = `CASE WHEN e.type = 'review_posted'
+       THEN substr(e.occurred_at, 1, 11) || '23:59:59.999Z'
+       ELSE e.occurred_at END`;
+
 /** "Live right now", read through the shared as-of predicate. */
 function liveOptions(appIds: string[]): AsOfOptions {
   const { reporting } = getConfig();
@@ -560,7 +584,7 @@ export function getCustomer(
        FROM customer_events e
        LEFT JOIN apps a ON a.id = e.app_id
        WHERE e.shop_id = @shopId AND e.suppressed = 0 AND e.app_id ${inScope}
-       ORDER BY e.occurred_at DESC
+       ORDER BY ${TIMELINE_ORDER} DESC, e.event_id DESC
        LIMIT @eventLimit`,
     )
     .all({ ...appParams, shopId, eventLimit }) as Array<

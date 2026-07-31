@@ -64,10 +64,18 @@ export function checkSourceConsistency(db: Db): Finding[] {
 
   let mismatched = 0;
   let worst = 0;
+  /**
+   * A stored cadence the sources actively contradict. Kept apart from the amount
+   * diff because only a settled sale states a cadence at all: where the sale has
+   * not landed yet, `derive.ts` infers one, and re-deriving it here would only
+   * restate the inference rather than test it. Silence about an interval the
+   * sources never gave is honest; disagreement with one they did give is not.
+   */
+  let contradicted = 0;
 
   for (const row of rows) {
-    const expectedInterval = row.sourceInterval ?? 'EVERY_30_DAYS';
-    const expectedMonthly = monthlyAmountFor(row.sourceAmount ?? 0, expectedInterval);
+    if (row.sourceInterval && row.sourceInterval !== row.storedInterval) contradicted += 1;
+    const expectedMonthly = monthlyAmountFor(row.sourceAmount ?? 0, row.storedInterval);
     const delta = Math.abs(expectedMonthly - row.storedMonthly);
     if (delta > MONEY_EPSILON) {
       mismatched += 1;
@@ -81,6 +89,15 @@ export function checkSourceConsistency(db: Db): Finding[] {
       severity: worst > HIGH_MONEY_DELTA ? 'high' : 'low',
       message: `${mismatched} subscription(s) disagree with their source events on normalized monthly amount.`,
       detail: { mismatched, worstDelta: Math.round(worst * 100) / 100, total: rows.length },
+    });
+  }
+
+  if (contradicted > 0) {
+    findings.push({
+      check: 'billing_interval_consistency',
+      severity: 'high',
+      message: `${contradicted} subscription(s) are stored at a billing interval their settled sales contradict.`,
+      detail: { contradicted, total: rows.length },
     });
   }
 

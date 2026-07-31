@@ -91,6 +91,41 @@ describe('customer events: the raw feed compiled into a lifecycle', () => {
     assert.equal(subscribed.plan_amount, 100);
   });
 
+  it('reads a monthly-to-annual switch on the normalized amount, not the sticker price', () => {
+    resetEnvironment();
+    seed([
+      {
+        chargeRef: 'old',
+        shopId: '1',
+        amount: 14,
+        activatedAt: '2024-01-10T00:00:00Z',
+        firstSaleAt: '2024-01-10T00:00:00Z',
+        churnedAt: '2024-03-01T00:00:00Z',
+      },
+      {
+        chargeRef: 'new',
+        shopId: '1',
+        amount: 140,
+        billingInterval: 'ANNUAL',
+        activatedAt: '2024-03-01T00:00:00Z',
+        firstSaleAt: '2024-03-01T00:00:00Z',
+      },
+    ]);
+
+    // $140 a year is $11.67 a month, down from $14, so the direction follows the
+    // MRR: spec §0 invariant 3 decides upgrade vs downgrade on the normalized
+    // amount, and §5.4 keeps the label consistent with the sign of net_change.
+    // The Slack layer rewords this one for humans without touching either.
+    const types = typesFor('1');
+    assert.equal(types.filter((type) => type === 'downgraded').length, 1);
+    assert.equal(types.filter((type) => type === 'upgraded').length, 0);
+
+    const move = eventsFor('1').find((row) => row.type === 'downgraded')!;
+    assert.equal(move.plan_amount, 140 / 12);
+    assert.ok(move.net_change! < 0, 'the sign agrees with the label');
+    assert.ok(Math.abs(move.net_change! - (140 / 12 - 14)) < 0.005);
+  });
+
   it('reads a mid-cycle upgrade as one event and zero churn', () => {
     resetEnvironment();
     seed([
@@ -239,7 +274,7 @@ describe('customer events: the raw feed compiled into a lifecycle', () => {
     assert.equal(ledgerTotal(), 30);
   });
 
-  it('marks a trial that ended without paying, and never books revenue for it', () => {
+  it('reports a trial the merchant walked out of at the moment they left', () => {
     resetEnvironment();
     seed([
       {
@@ -254,10 +289,56 @@ describe('customer events: the raw feed compiled into a lifecycle', () => {
 
     const types = typesFor('1');
     assert.ok(types.includes('trial_started'));
-    assert.ok(types.includes('trial_expired'));
+    assert.ok(types.includes('trial_abandoned'));
+    // Spec 6.2: nothing expired here. The window never closed — the merchant
+    // left five days short of it, and dating an expiry at the 15th would report
+    // them as still trialling for five days after they had gone.
+    assert.equal(types.includes('trial_expired'), false);
+    const left = eventsFor('1').find((row) => row.type === 'trial_abandoned')!;
+    assert.equal(left.occurred_at, '2024-01-10T00:00:00.000Z');
     // A charge that never billed was abandoned, not churned: no MRR to lose.
     assert.equal(types.includes('unsubscribed'), false);
     assert.equal(ledgerTotal(), 0);
+  });
+
+  it('expires a trial that reached the end of its window still running', () => {
+    resetEnvironment();
+    seed([
+      {
+        chargeRef: 'c1',
+        shopId: '1',
+        amount: 30,
+        activatedAt: '2024-01-01T00:00:00Z',
+        billingOn: '2024-01-15T00:00:00Z',
+        churnedAt: '2024-01-20T00:00:00Z',
+      },
+    ]);
+
+    const types = typesFor('1');
+    assert.ok(types.includes('trial_expired'), 'the window closed before they left');
+    assert.equal(types.includes('trial_abandoned'), false);
+    const expired = eventsFor('1').find((row) => row.type === 'trial_expired')!;
+    assert.equal(expired.occurred_at, '2024-01-15T00:00:00.000Z');
+    assert.equal(ledgerTotal(), 0);
+  });
+
+  it('does not call a charge with no trial window an abandoned trial', () => {
+    resetEnvironment();
+    seed([
+      {
+        chargeRef: 'c1',
+        shopId: '1',
+        amount: 30,
+        // Approved and gone the same instant, and no billing date to define a
+        // free period: there was never a trial to walk out of.
+        activatedAt: '2024-01-01T00:00:00Z',
+        churnedAt: '2024-01-01T00:00:00Z',
+      },
+    ]);
+
+    const types = typesFor('1');
+    assert.equal(types.includes('trial_abandoned'), false);
+    assert.ok(types.includes('charge_abandoned'));
   });
 
   it('records the loss once when a merchant uninstalls instead of cancelling', () => {
@@ -456,5 +537,50 @@ describe('the customer read model', () => {
 
   it('reports nothing for a shop that was never seen', () => {
     assert.equal(getCustomer('does-not-exist'), null);
+  });
+
+  /**
+   * The App Store shows the day a review was posted and never the time, so a
+   * review is stored at that day's midnight. Ordered on that alone it lands
+   * ahead of everything else that day — including the install that had to come
+   * first for the merchant to have anything to review.
+   */
+  it('places a same-day review after the install it must have followed', () => {
+    resetEnvironment();
+    seed(
+      [
+        {
+          chargeRef: 'c1',
+          shopId: '20',
+          amount: 25,
+          activatedAt: '2024-05-10T09:15:00Z',
+          firstSaleAt: '2024-05-10T09:15:00Z',
+        },
+      ],
+      { installs: [{ shopId: '20', at: '2024-05-10T09:14:00Z' }] },
+    );
+
+    getDb()
+      .prepare(
+        `INSERT INTO customer_events (
+           event_id, app_id, shop_id, type, occurred_at, charge_id, prev_charge_id,
+           plan_name, plan_amount, billing_interval, currency, net_change, amount,
+           suppressed, detail
+         ) VALUES ('review:r1:posted', ?, '20', 'review_posted', '2024-05-10T00:00:00.000Z',
+                   '', '', NULL, NULL, NULL, NULL, NULL, NULL, 0, ?)`,
+      )
+      .run(APP_ID, JSON.stringify({ rating: 5, storeName: 'Shop 20' }));
+
+    // Newest first, so the review must appear above — not below — the install.
+    const order = getCustomer('20')!.events.map((event) => event.type);
+    assert.ok(
+      order.indexOf('review_posted') < order.indexOf('installed'),
+      `review should follow the install, got ${order.join(' → ')}`,
+    );
+    assert.ok(order.indexOf('review_posted') < order.indexOf('subscribed'));
+
+    // The stamp itself is left alone: the day is all anyone ever knew.
+    const review = getCustomer('20')!.events.find((event) => event.type === 'review_posted')!;
+    assert.equal(review.occurredAt, '2024-05-10T00:00:00.000Z');
   });
 });

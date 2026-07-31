@@ -997,3 +997,156 @@ describe('as-of history is reconstructed, not stored', () => {
     assert.equal(row.m, 100);
   });
 });
+
+/**
+ * Only `AppSubscriptionSale.billingInterval` states a cadence, and it arrives
+ * with the payout batch rather than the activation. Everything here is about the
+ * window in between, where an annual charge that is assumed monthly is counted
+ * at twelve times its worth.
+ */
+describe('billing cadence before the first sale settles', () => {
+  beforeEach(() => resetEnvironment());
+
+  const intervalOf = (chargeRef: string) =>
+    getDb()
+      .prepare(
+        'SELECT billing_interval AS i, monthly_amount AS m FROM subscriptions WHERE charge_ref = ?',
+      )
+      .get(chargeRef) as { i: string; m: number };
+
+  it('reads the cadence off a price point a settled sale already identified', () => {
+    seed([
+      // The app's annual price point, proven by a sale that has landed.
+      {
+        chargeRef: '1',
+        shopId: '10',
+        amount: 1200,
+        billingInterval: 'ANNUAL',
+        activatedAt: '2024-01-05T00:00:00Z',
+        firstSaleAt: '2024-01-05T00:00:00Z',
+      },
+      // Same plan, same price, no sale yet: annual, not $1200/mo.
+      {
+        chargeRef: '2',
+        shopId: '11',
+        amount: 1200,
+        activatedAt: '2024-05-01T00:00:00Z',
+        billingOn: '2024-05-15T00:00:00Z',
+      },
+    ]);
+
+    const row = intervalOf('2');
+    assert.equal(row.i, 'ANNUAL');
+    assert.equal(row.m, 100);
+  });
+
+  it('does not read a monthly charge as annual just because a pricier annual plan exists', () => {
+    seed([
+      {
+        chargeRef: '1',
+        shopId: '10',
+        amount: 1200,
+        billingInterval: 'ANNUAL',
+        activatedAt: '2024-01-05T00:00:00Z',
+        firstSaleAt: '2024-01-05T00:00:00Z',
+      },
+      {
+        chargeRef: '2',
+        shopId: '11',
+        amount: 120,
+        activatedAt: '2024-05-01T00:00:00Z',
+        billingOn: '2024-05-15T00:00:00Z',
+      },
+    ]);
+
+    const row = intervalOf('2');
+    assert.equal(row.i, 'EVERY_30_DAYS', 'a price the book has never seen stays on the default');
+    assert.equal(row.m, 120);
+  });
+
+  it('abstains where the same price point has been billed both ways', () => {
+    seed([
+      {
+        chargeRef: '1',
+        shopId: '10',
+        amount: 1200,
+        billingInterval: 'ANNUAL',
+        activatedAt: '2024-01-05T00:00:00Z',
+        firstSaleAt: '2024-01-05T00:00:00Z',
+      },
+      {
+        chargeRef: '2',
+        shopId: '11',
+        amount: 1200,
+        billingInterval: 'EVERY_30_DAYS',
+        activatedAt: '2024-02-05T00:00:00Z',
+        firstSaleAt: '2024-02-05T00:00:00Z',
+      },
+      {
+        chargeRef: '3',
+        shopId: '12',
+        amount: 1200,
+        activatedAt: '2024-05-01T00:00:00Z',
+        billingOn: '2024-05-15T00:00:00Z',
+      },
+    ]);
+
+    assert.equal(intervalOf('3').i, 'EVERY_30_DAYS', 'an ambiguous price point teaches nothing');
+  });
+
+  it('reads a billing date a year out as annual, with no price point to learn from', () => {
+    seed([
+      {
+        chargeRef: '1',
+        shopId: '10',
+        amount: 1200,
+        activatedAt: '2024-05-01T00:00:00Z',
+        billingOn: '2025-05-01T00:00:00Z',
+      },
+    ]);
+
+    const row = intervalOf('1');
+    assert.equal(row.i, 'ANNUAL');
+    assert.equal(row.m, 100);
+  });
+
+  it('holds an annual upgrade to a twelfth of its price on the day it activates', () => {
+    seed([
+      // The price point, learned from another shop.
+      {
+        chargeRef: '1',
+        shopId: '10',
+        amount: 1200,
+        billingInterval: 'ANNUAL',
+        activatedAt: '2024-01-05T00:00:00Z',
+        firstSaleAt: '2024-01-05T00:00:00Z',
+      },
+      // A shop on the monthly plan...
+      {
+        chargeRef: '2',
+        shopId: '11',
+        amount: 120,
+        activatedAt: '2024-03-01T00:00:00Z',
+        firstSaleAt: '2024-03-01T00:00:00Z',
+        churnedAt: '2024-05-01T00:00:00Z',
+      },
+      // ...moving to annual. The cancel and the activation share an instant, so
+      // this is billed at activation and gated into MRR immediately — which is
+      // exactly why its cadence has to be right before the sale settles.
+      {
+        chargeRef: '3',
+        shopId: '11',
+        amount: 1200,
+        activatedAt: '2024-05-01T00:00:00Z',
+        billingOn: '2025-05-01T00:00:00Z',
+      },
+    ]);
+
+    assert.equal(intervalOf('3').m, 100);
+    assert.equal(
+      pointAt(runMetric('mrr', monthly, { now: NOW }), '2024-05'),
+      200,
+      'the upgrading shop contributes 100, not 1200, alongside the annual shop',
+    );
+  });
+});

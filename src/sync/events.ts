@@ -58,6 +58,7 @@ export const CUSTOMER_EVENT_TYPES = [
   'subscription_frozen',
   'subscription_unfrozen',
   'charge_abandoned',
+  'trial_abandoned',
   // Trial lifecycle (derived from dates; nothing in the feed fires at trial end)
   'trial_started',
   'trial_converted',
@@ -391,7 +392,26 @@ function foldInstall(items: TimelineItem[], out: CleanEvent[]): void {
             ).toISOString();
             at = firstInteraction && backdated < firstInteraction ? firstInteraction : backdated;
           }
-          push('charge_abandoned', { occurred_at: at, plan_amount: planAmount });
+          // Two very different merchants end up here, and flattening them into
+          // one type loses the only distinction worth acting on: one installed
+          // the app, ran it on a trial, and decided against it; the other never
+          // got as far as a trial at all.
+          //
+          // The separator is spec 6.1's `canceled_during` — the charge ended
+          // while the trial window was still open. A cancel landing *after* the
+          // window has already been reported by `trial_expired`, so calling it
+          // an abandoned trial too would announce the same trial ending twice.
+          const duringTrial = Boolean(
+            sub &&
+              sub.activated_at &&
+              sub.trial_status !== 'none' &&
+              sub.trial_ends_at &&
+              at < sub.trial_ends_at,
+          );
+          push(duringTrial ? 'trial_abandoned' : 'charge_abandoned', {
+            occurred_at: at,
+            plan_amount: planAmount,
+          });
           break;
         }
 
@@ -532,7 +552,17 @@ function derivedItems(sub: SubRow): TimelineItem[] {
   // the whole stretch the subscription really was being paid for.
   if (hasTrial && sub.is_plan_change === 0) {
     add('derived:trial_started', sub.trial_started_at);
-    if (sub.trial_status === 'canceled') add('derived:trial_expired', sub.trial_ends_at);
+    // A trial expires only if it reached its end still running (spec 6.2). A
+    // merchant who walked out mid-window did not sit through one — and dating
+    // the expiry at the *scheduled* end, as this did unconditionally, put the
+    // event days or weeks after they were already gone. That merchant is
+    // reported by `trial_abandoned`, at the moment they actually left.
+    const ranItsCourse =
+      sub.trial_status === 'canceled' &&
+      sub.trial_ends_at !== null &&
+      sub.churn_at !== null &&
+      sub.churn_at >= sub.trial_ends_at;
+    if (ranItsCourse) add('derived:trial_expired', sub.trial_ends_at);
   }
   if (hasTrial && sub.trial_status === 'converted') {
     add('derived:trial_converted', sub.conversion_at);

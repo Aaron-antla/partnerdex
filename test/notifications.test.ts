@@ -12,8 +12,8 @@ import {
   setTopic,
   webhookHint,
 } from '../src/notifications/store.js';
-import { APP_SUBSCRIPTION_EVENTS } from '../src/notifications/topics.js';
-import { resetEnvironment, seed, seedForApp } from './helpers.js';
+import { APP_REVIEW_EVENTS, APP_SUBSCRIPTION_EVENTS } from '../src/notifications/topics.js';
+import { APP_ID, resetEnvironment, seed, seedForApp } from './helpers.js';
 
 /**
  * What gets said, to whom, and how many times.
@@ -113,6 +113,111 @@ describe('webhook handling', () => {
   });
 });
 
+/**
+ * The ledger stops anything being said twice; it cannot stop something being
+ * said late. Two backlogs produce that: an instance that was down, and a release
+ * that widens a topic a channel already subscribes to — the watermark is per
+ * topic, so the added types make months of history look like unsent news.
+ */
+describe('how old an event may be and still be news', () => {
+  const ACTIVATED = '2024-03-01T00:00:00Z';
+
+  /** `hours` after the fixture's activation. */
+  const clock = (hours: number) =>
+    new Date(new Date(ACTIVATED).getTime() + hours * 3_600_000);
+
+  /**
+   * A `review_posted` row written straight in. The App Store ingest is a long
+   * way from what this suite is testing, and only the timestamp matters here.
+   */
+  function seedReviewEvent(db: Db, occurredAt: string): void {
+    db.prepare(
+      `INSERT INTO customer_events (
+         event_id, app_id, shop_id, type, occurred_at, charge_id, prev_charge_id,
+         plan_name, plan_amount, billing_interval, currency, net_change, amount,
+         suppressed, detail
+       ) VALUES (?, ?, '', 'review_posted', ?, '', '', NULL, NULL, NULL, NULL,
+                 NULL, NULL, 0, ?)`,
+    ).run('review:r1:posted', APP_ID, occurredAt, JSON.stringify({ rating: 5, storeName: 'Acme' }));
+  }
+
+  function seedOne() {
+    resetEnvironment({ NOTIFICATION_MAX_AGE_HOURS: '24' });
+    const db = seed([
+      { chargeRef: 'c1', shopId: '1', amount: 29, activatedAt: ACTIVATED, firstSaleAt: ACTIVATED },
+    ]);
+    const channelId = channelWithTopic(db);
+    watermark(db, channelId, '2024-01-01T00:00:00Z');
+    stubFetch(ok);
+    return db;
+  }
+
+  it('announces an event from within the window', async () => {
+    const db = seedOne();
+    assert.equal((await dispatchPending(db, { now: clock(6) })).sent, 1);
+  });
+
+  it('stays quiet about one the window has passed', async () => {
+    const db = seedOne();
+    assert.equal((await dispatchPending(db, { now: clock(30) })).sent, 0);
+  });
+
+  /**
+   * The case the cap exists for: a release adds event types to a topic that has
+   * been switched on for months, and every past occurrence of the new types
+   * becomes undelivered news at once.
+   */
+  it('does not replay history when a topic gains a new event type', async () => {
+    resetEnvironment({ NOTIFICATION_MAX_AGE_HOURS: '24' });
+    const db = seed([
+      // A trial that converted long ago. `trial_converted` was not in the topic
+      // when this happened; now it is.
+      {
+        chargeRef: 'old',
+        shopId: '1',
+        amount: 29,
+        activatedAt: '2024-03-01T00:00:00Z',
+        billingOn: '2024-03-15T00:00:00Z',
+        firstSaleAt: '2024-03-15T00:00:00Z',
+      },
+    ]);
+    const channelId = channelWithTopic(db);
+    watermark(db, channelId, '2024-01-01T00:00:00Z');
+    stubFetch(ok);
+
+    // Six months later, the release lands and the next sync runs.
+    const summary = await dispatchPending(db, { now: new Date('2024-09-01T00:00:00Z') });
+
+    assert.equal(summary.sent, 0, 'nothing from six months ago is news');
+  });
+
+  /**
+   * The App Store publishes the day a review was posted, not the time, so a
+   * review is stamped at midnight and can look a full day older than it is —
+   * plus however long the sweep took to find it.
+   */
+  it('gives a review the length of its own day before calling it stale', async () => {
+    resetEnvironment({ NOTIFICATION_MAX_AGE_HOURS: '24', REVIEW_SWEEP_HOURS: '24' });
+    const db = getDb();
+    seedReviewEvent(db, '2024-03-01T00:00:00.000Z');
+    const channelId = createChannel(
+      { name: '#reviews', webhookUrl: 'https://hooks.slack.com/services/T1/B1/secret123' },
+      db,
+    ).id;
+    setTopic(channelId, APP_REVIEW_EVENTS.key, true, db);
+    db.prepare(
+      'UPDATE notification_subscriptions SET enabled_at = ? WHERE channel_id = ? AND topic = ?',
+    ).run('2024-01-01T00:00:00Z', channelId, APP_REVIEW_EVENTS.key);
+    stubFetch(ok);
+
+    // 40 hours past the stamped midnight — beyond the 24h a Partner API event
+    // would get, and still well inside a review's allowance.
+    const summary = await dispatchPending(db, { now: new Date('2024-03-02T16:00:00Z') });
+
+    assert.equal(summary.sent, 1);
+  });
+});
+
 describe('what a channel is told', () => {
   it('says nothing about what happened before the toggle was switched on', async () => {
     const db = seed([
@@ -193,14 +298,40 @@ describe('what a channel is told', () => {
 
     await dispatchPending(db);
 
-    assert.deepEqual(headlines(), ['Trial started']);
+    // One message for the activation instant, then the conversion on its own
+    // two weeks later — which is the event that actually carries the money.
+    assert.deepEqual(headlines(), ['Trial started', 'Trial converted']);
   });
 
   /**
-   * Shopify models an upgrade as *cancel the old charge, activate a new one*. A
-   * notifier reading the raw feed would tell the channel it had lost a customer
-   * and won a different one, in that order, every time somebody paid more.
+   * The reported failure: a merchant started a trial, uninstalled hours later,
+   * and the channel heard only the good half. A trial the reader was told about
+   * starting must be a trial they are told about ending.
    */
+  it('reports a trial the merchant abandons hours after starting it', async () => {
+    const db = seed(
+      [
+        {
+          chargeRef: 'c1',
+          shopId: '1',
+          amount: 4.99,
+          activatedAt: '2024-03-01T00:22:51Z',
+          billingOn: '2024-03-15T00:00:00Z',
+          churnedAt: '2024-03-01T01:42:53Z',
+        },
+      ],
+      { uninstalls: [{ shopId: '1', at: '2024-03-01T01:42:52Z' }] },
+    );
+    const channelId = channelWithTopic(db);
+    watermark(db, channelId, '2024-01-01T00:00:00Z');
+    stubFetch(ok);
+
+    await dispatchPending(db);
+
+    assert.deepEqual(headlines(), ['Trial started', 'Trial cancelled']);
+    // At the moment they left, not at the trial end date they never reached.
+    assert.match(JSON.stringify(sent[1]!.blocks), /2024-03-01T01:42:53/);
+  });
   it('reports an upgrade as an upgrade, not as a cancellation', async () => {
     const db = seed([
       {
@@ -457,5 +588,85 @@ describe('message rendering', () => {
 
   it('leads with the headline, so a lock screen shows what happened', () => {
     assert.equal(buildMessage(base).text, 'Subscription started: Acme Store — Pro — $29.00/mo');
+  });
+
+  /**
+   * Moving from $14/mo to $140/yr lowers MRR to $11.67, so the pipeline records
+   * a `downgraded` event — which the spec requires and MRR depends on. The
+   * message must not repeat that word at a merchant who just paid for a year.
+   */
+  describe('a switch between monthly and annual billing', () => {
+    const toAnnual = {
+      ...base,
+      type: 'downgraded',
+      planName: 'Starter',
+      amount: 140,
+      billingInterval: 'ANNUAL',
+      netChange: 140 / 12 - 14,
+      previousPlanName: 'Starter',
+      previousAmount: 14,
+      previousBillingInterval: 'EVERY_30_DAYS',
+    };
+
+    it('is announced as a switch, not as a downgrade', () => {
+      const message = buildMessage(toAnnual);
+      assert.match(message.text, /^Switched to annual billing:/);
+      assert.equal(JSON.stringify(message.blocks).includes('downgraded'), false);
+    });
+
+    it('still reports the MRR it actually lost', () => {
+      const rendered = JSON.stringify(buildMessage(toAnnual).blocks);
+      assert.match(rendered, /−\$2\.33\/mo/);
+      assert.match(rendered, /\$140\.00\/yr/);
+      assert.match(rendered, /Was on Starter — \$14\.00\/mo/);
+    });
+
+    it('reads the other direction as a switch too', () => {
+      const message = buildMessage({
+        ...base,
+        type: 'upgraded',
+        planName: 'Starter',
+        amount: 14,
+        billingInterval: 'EVERY_30_DAYS',
+        netChange: 14 - 140 / 12,
+        previousPlanName: 'Starter',
+        previousAmount: 140,
+        previousBillingInterval: 'ANNUAL',
+      });
+      assert.match(message.text, /^Switched to monthly billing:/);
+    });
+
+    it('leaves a real tier move alone', () => {
+      const message = buildMessage({
+        ...base,
+        type: 'upgraded',
+        planName: 'Pro',
+        amount: 290,
+        billingInterval: 'ANNUAL',
+        netChange: 290 / 12 - 14,
+        previousPlanName: 'Starter',
+        previousAmount: 14,
+        previousBillingInterval: 'EVERY_30_DAYS',
+      });
+      assert.match(
+        message.text,
+        /^Subscription upgraded:/,
+        'the plan name changed, so this is a tier move that happens to switch cadence',
+      );
+    });
+
+    it('leaves a same-cadence downgrade alone', () => {
+      const message = buildMessage({
+        ...base,
+        type: 'downgraded',
+        planName: 'Starter',
+        amount: 9.99,
+        netChange: 9.99 - 14,
+        previousPlanName: 'Starter',
+        previousAmount: 14,
+        previousBillingInterval: 'EVERY_30_DAYS',
+      });
+      assert.match(message.text, /^Subscription downgraded:/);
+    });
   });
 });

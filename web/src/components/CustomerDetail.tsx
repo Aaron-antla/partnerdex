@@ -6,7 +6,7 @@ import {
   type CustomerEventRecord,
   type CustomerSubscription,
 } from '../api';
-import { formatFullDate, formatValue } from '../format';
+import { formatCalendarDate, formatFullDate, formatValue } from '../format';
 import { StatusPill } from './Customers';
 import { Stars } from './Reviews';
 
@@ -32,9 +32,10 @@ const EVENT_LABEL: Record<string, string> = {
   unsubscribed: 'Cancelled',
   subscription_frozen: 'Billing frozen',
   subscription_unfrozen: 'Billing resumed',
-  charge_abandoned: 'Charge abandoned',
+  charge_abandoned: 'Never approved the charge',
   trial_started: 'Trial started',
   trial_converted: 'Trial converted',
+  trial_abandoned: 'Cancelled during trial',
   trial_expired: 'Trial ended',
   payment: 'Payment',
   refund: 'Refund',
@@ -59,6 +60,7 @@ const EVENT_TONE: Record<string, 'good' | 'bad' | 'neutral'> = {
   downgraded: 'bad',
   subscription_frozen: 'bad',
   trial_expired: 'bad',
+  trial_abandoned: 'bad',
   charge_abandoned: 'bad',
   deactivated: 'bad',
   refund: 'bad',
@@ -143,7 +145,14 @@ function EventRow({ event, currency }: { event: CustomerEventRecord; currency: s
             this timeline rather than only in the count. */}
         {body ? <p className="event-quote">{body}</p> : null}
         <div className="event-meta">
-          <span>{formatFullDate(event.occurredAt)}</span>
+          {/* A posted review carries a day and no time, so it is read as the
+              date it is rather than converted out of a timezone it never had.
+              Everything else on this timeline is a real instant. */}
+          <span>
+            {event.type === 'review_posted'
+              ? formatCalendarDate(event.occurredAt.slice(0, 10))
+              : formatFullDate(event.occurredAt)}
+          </span>
           {event.appName ? <span>{event.appName}</span> : null}
           {event.planName ? <span>{event.planName}</span> : null}
           {churnReason === 'uninstalled' ? <span>ended by uninstall</span> : null}
@@ -298,7 +307,7 @@ function ReviewCell({ app }: { app: CustomerApp }) {
         >
           <div className="review-head">
             <Stars rating={review.rating} />
-            <span className="review-meta">{formatFullDate(`${review.postedOn}T00:00:00Z`)}</span>
+            <span className="review-meta">{formatCalendarDate(review.postedOn)}</span>
             {review.editedAt ? (
               <span className="pill pill-edited">
                 {review.priorRating !== null && review.priorRating !== review.rating
@@ -316,7 +325,7 @@ function ReviewCell({ app }: { app: CustomerApp }) {
             <div className="review-reply">
               <span className="review-meta">
                 You replied
-                {review.replyOn ? ` ${formatFullDate(`${review.replyOn}T00:00:00Z`)}` : ''}
+                {review.replyOn ? ` ${formatCalendarDate(review.replyOn)}` : ''}
               </span>
               <p>{review.replyBody}</p>
             </div>

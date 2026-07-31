@@ -203,6 +203,20 @@ export interface Config {
      */
     reviewSweepHours: number;
     /**
+     * How old an event may be and still be worth announcing.
+     *
+     * The delivery ledger stops anything being said twice, but it cannot stop
+     * something being said *late*. Two things produce a backlog of undelivered
+     * history: an instance that was down for a while, and a release that adds
+     * event types to a topic a channel already subscribes to — the watermark is
+     * per topic, so widening one silently reclassifies months of past events as
+     * unsent news. Neither is worth a hundred pings about merchants who came and
+     * went weeks ago.
+     *
+     * Set to 0 to announce a backlog however old.
+     */
+    notificationMaxAgeHours: number;
+    /**
      * Whether a reverse proxy terminates TLS in front of this process.
      *
      * Off by default because it is only safe when something really is in front:
@@ -248,6 +262,7 @@ export function getConfig(): Config {
       cacheTtlSeconds: int('CACHE_TTL_SECONDS', 600),
       syncIntervalMinutes: nonNegative('SYNC_INTERVAL_MINUTES', 5),
       reviewSweepHours: nonNegative('REVIEW_SWEEP_HOURS', 24),
+      notificationMaxAgeHours: nonNegative('NOTIFICATION_MAX_AGE_HOURS', 24),
       trustProxy: bool('TRUST_PROXY', false),
     },
     reporting: {

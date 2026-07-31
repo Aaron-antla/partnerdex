@@ -6,7 +6,7 @@ import {
   type ReviewCandidate,
   type ReviewSummary,
 } from '../api';
-import { formatFullDate } from '../format';
+import { formatCalendarDate } from '../format';
 
 /**
  * The reviews we could not attribute to a customer, and the way to fix that.
@@ -143,7 +143,7 @@ function UnmatchedRow({ review, onLinked }: { review: ReviewSummary; onLinked: (
         <Stars rating={review.rating} />
         <span className="review-store">{review.storeName || 'Unknown store'}</span>
         {review.country ? <span className="review-meta">{review.country}</span> : null}
-        <span className="review-meta">{formatFullDate(`${review.postedOn}T00:00:00Z`)}</span>
+        <span className="review-meta">{formatCalendarDate(review.postedOn)}</span>
         {review.appName ? <span className="review-meta">{review.appName}</span> : null}
         {/* Why it is here, rather than leaving the reader to wonder whether the
             matcher simply failed. */}

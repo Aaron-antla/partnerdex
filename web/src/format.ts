@@ -66,6 +66,28 @@ export function formatFullDate(iso: string): string {
 }
 
 /**
+ * A calendar date that was never an instant — the day the App Store says a
+ * review was posted, with no time attached because the listing never shows one.
+ *
+ * Read as UTC rather than in the browser's timezone, which is the opposite of
+ * what `formatFullDate` must do. A real instant belongs to whatever day it fell
+ * on for the reader; a date has no timezone to be converted out of, so pushing
+ * it through one only moves it. A review dated the 29th, stored as the 29th at
+ * midnight, renders as the 28th anywhere west of UTC — every reader in the
+ * Americas sees each review a day early.
+ *
+ * Takes `YYYY-MM-DD` as stored, so nothing has to fabricate a time first.
+ */
+export function formatCalendarDate(date: string): string {
+  return new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+/**
  * A stored instant read back in the browser's own timezone. Sync times are the
  * one figure a reader checks against their own clock — "is this stale?" — so
  * they carry the time of day and are never shown in UTC.

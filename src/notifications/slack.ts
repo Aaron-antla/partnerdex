@@ -1,4 +1,4 @@
-import { EVENT_PRESENTATION } from './topics.js';
+import { EVENT_PRESENTATION, type EventPresentation } from './topics.js';
 
 /**
  * The Slack half: one lifecycle event rendered as a Block Kit message, and the
@@ -240,14 +240,44 @@ function buildReviewMessage(notice: SubscriptionNotice): SlackMessage {
   };
 }
 
+/**
+ * A plan change that moved only the billing cadence, not the tier.
+ *
+ * Shopify models it as a cancel plus an activation, like every other plan
+ * change, so the state machine classifies it `upgraded` or `downgraded` from the
+ * normalized monthly amounts — and it is right to: $140/yr genuinely is less MRR
+ * than $14/mo, and the customer-events spec requires that comparison and a
+ * `net_change` consistent with it.
+ *
+ * But "Subscription downgraded" is the wrong sentence to put in front of a human
+ * about a merchant who just committed to a year. So the wording is corrected
+ * here, in the copy, where it changes nothing that a number depends on: the
+ * stored event type, its `net_change`, and every metric built on them are
+ * untouched. The MRR line still reads −$2.33/mo, because that is what happened.
+ *
+ * Only fires when the plan name is unchanged and the cadence is not, which is
+ * exactly the switch and never a real tier move.
+ */
+function cadenceSwitch(notice: SubscriptionNotice): EventPresentation | null {
+  if (notice.type !== 'upgraded' && notice.type !== 'downgraded') return null;
+  if (!notice.billingInterval || !notice.previousBillingInterval) return null;
+  if (notice.billingInterval === notice.previousBillingInterval) return null;
+  if (!notice.planName || notice.planName !== notice.previousPlanName) return null;
+
+  return notice.billingInterval === 'ANNUAL'
+    ? { headline: 'Switched to annual billing', emoji: ':date:', tone: 'good' }
+    : { headline: 'Switched to monthly billing', emoji: ':date:', tone: 'neutral' };
+}
+
 export function buildMessage(notice: SubscriptionNotice): SlackMessage {
   if (notice.type.startsWith('review_')) return buildReviewMessage(notice);
 
-  const presentation = EVENT_PRESENTATION[notice.type] ?? {
-    headline: notice.type,
-    emoji: ':bell:',
-    tone: 'neutral' as const,
-  };
+  const presentation = cadenceSwitch(notice) ??
+    EVENT_PRESENTATION[notice.type] ?? {
+      headline: notice.type,
+      emoji: ':bell:',
+      tone: 'neutral' as const,
+    };
 
   const shop = shopLabel(notice);
   const plan = planLine(notice.planName, notice.amount, notice.billingInterval, notice.currency);

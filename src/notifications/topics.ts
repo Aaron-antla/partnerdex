@@ -33,6 +33,13 @@ export const EVENT_PRESENTATION: Record<string, EventPresentation> = {
   subscribed: { headline: 'Subscription started', emoji: ':tada:', tone: 'good' },
   resubscribed: { headline: 'Subscription restarted', emoji: ':repeat:', tone: 'good' },
   trial_started: { headline: 'Trial started', emoji: ':seedling:', tone: 'good' },
+  // The two ways a trial ends, kept apart because they call for opposite
+  // reactions. `trial_expired` is the third: a trial that ran its full window
+  // and simply lapsed, which nobody needs woken up for.
+  trial_converted: { headline: 'Trial converted', emoji: ':moneybag:', tone: 'good' },
+  trial_abandoned: { headline: 'Trial cancelled', emoji: ':leaves:', tone: 'bad' },
+  trial_expired: { headline: 'Trial ended without converting', emoji: ':hourglass:', tone: 'bad' },
+  charge_abandoned: { headline: 'Charge never approved', emoji: ':grey_question:', tone: 'neutral' },
   upgraded: { headline: 'Subscription upgraded', emoji: ':arrow_up:', tone: 'good' },
   downgraded: { headline: 'Subscription downgraded', emoji: ':arrow_down:', tone: 'bad' },
   unsubscribed: { headline: 'Subscription cancelled', emoji: ':wave:', tone: 'bad' },
@@ -66,6 +73,8 @@ export const APP_SUBSCRIPTION_EVENTS: NotificationTopic = {
     'subscribed',
     'resubscribed',
     'trial_started',
+    'trial_converted',
+    'trial_abandoned',
     'unsubscribed',
     'subscription_frozen',
     'subscription_unfrozen',
@@ -74,6 +83,8 @@ export const APP_SUBSCRIPTION_EVENTS: NotificationTopic = {
   ],
   covers: [
     'Subscription started (including trial started)',
+    'Trial converted to paid',
+    'Trial cancelled before it converted',
     'Subscription cancelled',
     'Subscription frozen',
     'Subscription unfrozen',

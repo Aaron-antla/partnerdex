@@ -3,6 +3,7 @@ import { resolveScopedAppIds } from '../sync/index.js';
 import { listChannels, recordDeliveryOutcome, webhookUrlFor } from './store.js';
 import { buildMessage, postToSlack, type SubscriptionNotice } from './slack.js';
 import { topicByKey } from './topics.js';
+import { getConfig } from '../config.js';
 
 /**
  * Deciding what to say, and saying it exactly once.
@@ -75,6 +76,37 @@ interface PendingRow {
 }
 
 /**
+ * The one event whose timestamp is a calendar date rather than an instant: the
+ * App Store publishes the day a review was posted and not the time, so
+ * `appstore/events.ts` stamps it at that day's midnight.
+ */
+const DAY_STAMPED_EVENT_TYPE = 'review_posted';
+
+const MS_PER_HOUR = 3_600_000;
+
+/**
+ * How far back an event may sit and still count as news (`notificationMaxAgeHours`).
+ *
+ * A review posted at 23:00 is stamped 23 hours before it happened, and the sweep
+ * that finds it runs at most `reviewSweepHours` later, so by the time it is
+ * first seen its apparent age can exceed a day without it being stale at all.
+ * Judging it on the same clock as a Partner API event — which carries a true
+ * instant — would drop most review notifications on the floor. It gets the
+ * length of its own day and one sweep on top.
+ */
+function stalenessCutoffs(now: Date): { instant: string; dayStamped: string } {
+  const { runtime } = getConfig();
+  if (runtime.notificationMaxAgeHours === 0) {
+    return { instant: '', dayStamped: '' };
+  }
+  const back = (hours: number) => new Date(now.getTime() - hours * MS_PER_HOUR).toISOString();
+  return {
+    instant: back(runtime.notificationMaxAgeHours),
+    dayStamped: back(runtime.notificationMaxAgeHours + 24 + runtime.reviewSweepHours),
+  };
+}
+
+/**
  * Events a channel has not been told about yet.
  *
  * The subscription joins are what turn an event into a message worth reading:
@@ -89,12 +121,18 @@ function pendingFor(
   eventTypes: readonly string[],
   enabledAt: string,
   appIds: string[],
+  now: Date,
 ): PendingRow[] {
   const typeList = eventTypes.map((_, i) => `@type${i}`).join(', ');
   const params: Record<string, unknown> = { channelId, enabledAt, cap: MAX_PER_CHANNEL_PER_RUN };
   eventTypes.forEach((type, i) => {
     params[`type${i}`] = type;
   });
+
+  const cutoffs = stalenessCutoffs(now);
+  params.freshEnough = cutoffs.instant;
+  params.freshEnoughDayStamped = cutoffs.dayStamped;
+  params.dayStamped = DAY_STAMPED_EVENT_TYPE;
 
   const appList = appIds.map((_, i) => `@napp${i}`).join(', ');
   appIds.forEach((id, i) => {
@@ -123,6 +161,8 @@ function pendingFor(
         WHERE e.suppressed = 0
           AND e.type IN (${typeList})
           AND e.occurred_at > @enabledAt
+          AND e.occurred_at >
+              CASE WHEN e.type = @dayStamped THEN @freshEnoughDayStamped ELSE @freshEnough END
           AND e.app_id ${inScope}
           AND NOT EXISTS (
                 SELECT 1 FROM notification_deliveries d
@@ -276,6 +316,7 @@ async function dispatchChannel(
   channel: ReturnType<typeof listChannels>[number],
   appIds: string[],
   summary: DispatchSummary,
+  now: Date,
 ): Promise<void> {
   const url = webhookUrlFor(channel.id, db);
   if (!url) return;
@@ -293,7 +334,7 @@ async function dispatchChannel(
     )?.enabled_at;
     if (!enabledAt) continue;
 
-    const rows = pendingFor(db, channel.id, topic.eventTypes, enabledAt, appIds);
+    const rows = pendingFor(db, channel.id, topic.eventTypes, enabledAt, appIds, now);
     if (rows.length === 0) continue;
 
     for (const { notice, eventIds } of collapse(rows)) {
@@ -336,15 +377,18 @@ let inFlight: Promise<DispatchSummary> | null = null;
  * Never runs twice at once: a manual test and a completing sync can arrive
  * together, and two passes over the same pending set would race on the ledger.
  */
-export function dispatchPending(db: Db = getDb()): Promise<DispatchSummary> {
+export function dispatchPending(
+  db: Db = getDb(),
+  options: { now?: Date } = {},
+): Promise<DispatchSummary> {
   if (inFlight) return inFlight;
-  inFlight = run(db).finally(() => {
+  inFlight = run(db, options.now ?? new Date()).finally(() => {
     inFlight = null;
   });
   return inFlight;
 }
 
-async function run(db: Db): Promise<DispatchSummary> {
+async function run(db: Db, now: Date): Promise<DispatchSummary> {
   const channels = listChannels(db).filter((channel) => channel.topics.length > 0);
   if (channels.length === 0) return { ...EMPTY };
 
@@ -353,7 +397,7 @@ async function run(db: Db): Promise<DispatchSummary> {
 
   for (const channel of channels) {
     try {
-      await dispatchChannel(db, channel, appIds, summary);
+      await dispatchChannel(db, channel, appIds, summary, now);
     } catch (cause) {
       // One channel's failure is not the other channels' problem.
       console.error(`[partnerdex] notification dispatch failed for "${channel.name}":`, cause);
