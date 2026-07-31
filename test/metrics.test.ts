@@ -5,6 +5,7 @@ import { runMetric } from '../src/metrics/registry.js';
 import { monthlyAmountFor } from '../src/sync/derive.js';
 import { autoInterval, resolveWindow } from '../src/metrics/time.js';
 import { getDb } from '../src/db/index.js';
+import { listCustomers } from '../src/customers/index.js';
 import { transactionVariables } from '../src/sync/index.js';
 
 const NOW = new Date('2024-07-01T00:00:00.000Z');
@@ -995,6 +996,95 @@ describe('as-of history is reconstructed, not stored', () => {
       .get() as { m: number; i: string };
     assert.equal(row.i, 'ANNUAL');
     assert.equal(row.m, 100);
+  });
+});
+
+/**
+ * Shopify models a plan change as *cancel one charge, activate another*, and
+ * carries any unused trial days onto the new charge. Whether that replacement
+ * is already earning depends entirely on whether the merchant had ever paid.
+ */
+describe('a plan change that lands mid-trial', () => {
+  beforeEach(() => resetEnvironment());
+
+  const stateOf = (chargeRef: string) =>
+    getDb()
+      .prepare(
+        `SELECT trial_status AS trial, conversion_at AS conversion, ROUND(monthly_amount, 2) AS mrr
+         FROM subscriptions WHERE charge_ref = ?`,
+      )
+      .get(chargeRef) as { trial: string; conversion: string | null; mrr: number };
+
+  /**
+   * `derive` reads the wall clock to decide whether a billing date has passed,
+   * so a trial that is still open has to be dated against the same clock. Fixed
+   * 2024 dates would describe a trial that ended two years ago.
+   */
+  const daysFromNow = (days: number) =>
+    new Date(Date.now() + days * 86_400_000).toISOString();
+
+  it('keeps a merchant who switched plans inside their trial on trial', () => {
+    seed([
+      // A 14-day trial, never billed, abandoned on day 7 for another plan.
+      {
+        chargeRef: 'trial',
+        shopId: '10',
+        amount: 14,
+        activatedAt: daysFromNow(-7),
+        billingOn: daysFromNow(7),
+        churnedAt: daysFromNow(-0.01),
+      },
+      // Shopify carries the unused trial days across, so the replacement bills
+      // on the date the *original* trial would have ended.
+      {
+        chargeRef: 'switched',
+        shopId: '10',
+        amount: 140,
+        activatedAt: daysFromNow(-0.009),
+        billingOn: daysFromNow(7),
+      },
+    ]);
+
+    const row = stateOf('switched');
+    assert.equal(row.trial, 'in_trial', 'still trialling — nothing has been billed');
+    assert.equal(row.conversion, null, 'and so contributes nothing to MRR');
+    assert.equal(
+      listCustomers({ search: 's10.example' }).customers[0]!.status,
+      'trialing',
+      'the merchant reads as trialing, not paying',
+    );
+    assert.equal(runMetric('mrr', { period: 'last_12_months', interval: 'month' }).value, 0);
+  });
+
+  it('still credits a merchant who upgrades a plan they were already paying for', () => {
+    seed([
+      {
+        chargeRef: 'paid',
+        shopId: '11',
+        amount: 30,
+        activatedAt: daysFromNow(-60),
+        firstSaleAt: daysFromNow(-60),
+        churnedAt: daysFromNow(-0.01),
+      },
+      // Mid-cycle upgrade: the days already paid for make the billing gap look
+      // short, but this merchant has been paying for two months.
+      {
+        chargeRef: 'upgrade',
+        shopId: '11',
+        amount: 60,
+        activatedAt: daysFromNow(-0.009),
+        billingOn: daysFromNow(12),
+      },
+    ]);
+
+    const row = stateOf('upgrade');
+    assert.equal(row.trial, 'none', 'no trial — they are mid-cycle on a paid plan');
+    assert.ok(row.conversion !== null, 'and they keep earning through the change');
+    assert.equal(
+      listCustomers({ search: 's11.example' }).customers[0]!.status,
+      'paying',
+    );
+    assert.equal(runMetric('mrr', { period: 'last_12_months', interval: 'month' }).value, 60);
   });
 });
 
