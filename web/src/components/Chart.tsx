@@ -7,13 +7,12 @@ import {
   CartesianGrid,
   Line,
   LineChart,
-  ResponsiveContainer,
-  Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
 import type { MetricFormat } from '../api';
 import { formatBucketDate, formatFullDate, formatValue } from '../format';
+import { ChartContainer, ChartTooltip, type ChartConfig } from '@/components/ui/chart';
 
 /**
  * The plot primitives every card draws with.
@@ -22,10 +21,10 @@ import { formatBucketDate, formatFullDate, formatValue } from '../format';
  * data reads and the frame recedes — and both follow the surface when the theme
  * flips, since nothing here names a colour directly.
  *
- * A legend is rendered by the card whenever there is more than one series, and
- * those cards also carry a table view: four slots is past the point where colour
- * alone identifies a series, whatever its contrast. A single-series card needs
- * neither — its title names the series.
+ * A legend is rendered by the card whenever there is more than one series.
+ * Four slots is past the point where colour alone identifies a series; the
+ * names sit in the legend, and the card title opens the merchants in the figure
+ * when that population is a customer list.
  */
 
 export interface ChartSeries {
@@ -173,13 +172,28 @@ function sharedAxes(format: MetricFormat, currency: string | null, interval: str
   );
 }
 
-function Frame({ height, children }: { height: number; children: React.ReactElement }) {
+function Frame({
+  height,
+  series,
+  children,
+}: {
+  height: number;
+  series: ChartSeries[];
+  children: React.ComponentProps<typeof ChartContainer>['children'];
+}) {
+  const config = Object.fromEntries(
+    series.map((item) => [item.key, { label: item.name, color: item.color }]),
+  ) satisfies ChartConfig;
+
   return (
-    <div className="plot" style={{ height }}>
-      <ResponsiveContainer width="100%" height="100%">
-        {children}
-      </ResponsiveContainer>
-    </div>
+    <ChartContainer
+      config={config}
+      className="aspect-auto w-full"
+      style={{ height }}
+      initialDimension={{ width: 320, height }}
+    >
+      {children}
+    </ChartContainer>
   );
 }
 
@@ -193,10 +207,10 @@ export function StackedAreaPlot({
   height = 150,
 }: PlotProps) {
   return (
-    <Frame height={height}>
+    <Frame height={height} series={series}>
       <AreaChart data={data} margin={MARGIN}>
         {sharedAxes(format, currency, interval)}
-        <Tooltip
+        <ChartTooltip
           cursor={{ stroke: 'var(--axis)', strokeWidth: 1 }}
           content={<SeriesTooltip series={series} format={format} currency={currency} showTotal />}
         />
@@ -223,10 +237,10 @@ export function StackedAreaPlot({
 /** Flow metrics: money or counts that accumulate inside each bucket. */
 export function BarPlot({ data, series, format, currency, interval, height = 150 }: PlotProps) {
   return (
-    <Frame height={height}>
-      <BarChart data={data} margin={MARGIN}>
+    <Frame height={height} series={series}>
+      <BarChart data={data} accessibilityLayer margin={MARGIN}>
         {sharedAxes(format, currency, interval)}
-        <Tooltip
+        <ChartTooltip
           cursor={{ fill: 'var(--hover-wash)' }}
           content={<SeriesTooltip series={series} format={format} currency={currency} showTotal />}
         />
@@ -251,10 +265,10 @@ export function BarPlot({ data, series, format, currency, interval, height = 150
 /** Stock metrics and rates: a level read at each point in time. */
 export function LinePlot({ data, series, format, currency, interval, height = 150 }: PlotProps) {
   return (
-    <Frame height={height}>
+    <Frame height={height} series={series}>
       <LineChart data={data} margin={MARGIN}>
         {sharedAxes(format, currency, interval)}
-        <Tooltip
+        <ChartTooltip
           cursor={{ stroke: 'var(--axis)', strokeWidth: 1 }}
           content={
             <SeriesTooltip series={series} format={format} currency={currency} showTotal={false} />

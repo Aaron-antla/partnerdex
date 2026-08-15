@@ -20,7 +20,7 @@ import { CustomerDetail } from './components/CustomerDetail';
 import { Customers } from './components/Customers';
 import { Login } from './components/Login';
 import { MetricCard } from './components/MetricCard';
-import { Nav } from './components/Nav';
+import { AppSidebar, NavToggle } from './components/AppSidebar';
 import { Listings } from './components/Listings';
 import { BigQuery } from './components/BigQuery';
 import { Funnel } from './components/Funnel';
@@ -28,6 +28,10 @@ import { Notifications } from './components/Notifications';
 import { UnmatchedReviews } from './components/Reviews';
 import { DEFAULT_FILTERS, metricsFor, pageById } from './pages';
 import { RangeControl } from './components/RangeControl';
+import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Label } from '@/components/ui/label';
 
 /**
  * Funnel column widths.
@@ -66,6 +70,7 @@ function useTheme(): ['dark' | 'light', () => void] {
     setTheme((current) => {
       const next = current === 'dark' ? 'light' : 'dark';
       document.documentElement.dataset.theme = next;
+      document.documentElement.classList.toggle('dark', next === 'dark');
       window.localStorage.setItem(THEME_KEY, next);
       return next;
     });
@@ -270,12 +275,6 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
   const [collapsed, setCollapsed] = useState(
     () => window.localStorage.getItem(COLLAPSE_KEY) === '1',
   );
-  const toggleNav = useCallback(() => {
-    setCollapsed((current) => {
-      window.localStorage.setItem(COLLAPSE_KEY, current ? '0' : '1');
-      return !current;
-    });
-  }, []);
 
   const [overview, setOverview] = useState<Overview | null>(null);
   const [apps, setApps] = useState<AppSummary[]>([]);
@@ -418,7 +417,8 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setQuery((current) => ({ ...current, ...changes }));
   }, []);
 
-  // The overview greets; every other page names itself.
+  // The overview greets; a metric's customer list names the figure; every
+  // other page names itself.
   const heading = page.id === 'overview' ? greeting() : { title: page.title, blurb: page.blurb };
 
   const anyMetric = overview ? Object.values(overview)[0] : undefined;
@@ -427,10 +427,16 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
   const fixedRange = isFunnel && query.granularity === 'previous_7_days';
 
   return (
-    <div className={collapsed ? 'shell collapsed' : 'shell'}>
-      <Nav current={page.id} collapsed={collapsed} onToggle={toggleNav} onLogout={onLogout} />
-
+    <TooltipProvider>
+    <SidebarProvider className="min-h-svh">
+      <AppSidebar current={page.id} onLogout={onLogout} />
+      <NavToggle />
+      <SidebarInset>
       <main className="main">
+        <div className="mb-3 rounded-md border border-dashed border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+          shadcn/ui preview on branch <code>experiment/shadcn-ui</code>. Run{' '}
+          <code>git checkout main</code> to restore the original dashboard.
+        </div>
         <header className="masthead">
           <div>
             <h1>{heading.title}</h1>
@@ -446,51 +452,45 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
           <div className="controls">
             {filters.includes('app') ? (
               <div className="control">
-                <label htmlFor="app">App</label>
-                {/* The funnel offers one app at a time, from the apps that have
-                    a GA4 dataset. "All apps" is absent rather than disabled:
-                    across apps, one app's visitors sit above several apps'
-                    installs and the conversion exceeds 100%. */}
-                <select
-                  id="app"
-                  value={query.appId}
+                <Label>App</Label>
+                <Select
+                  value={query.appId || (isFunnel ? '' : 'all')}
                   disabled={isFunnel && (funnelApps?.length ?? 0) === 0}
-                  onChange={(event) => patch({ appId: event.target.value })}
+                  onValueChange={(next) => patch({ appId: next === 'all' ? '' : next })}
                 >
-                  {isFunnel ? (
-                    funnelApps === null ? (
-                      <option value="">Loading…</option>
-                    ) : funnelApps.length === 0 ? (
-                      <option value="">No app has a dataset yet</option>
-                    ) : null
-                  ) : (
-                    <option value="">All apps in scope</option>
-                  )}
-                  {(isFunnel ? funnelApps ?? [] : apps).map((app) => (
-                    <option key={app.id} value={app.id}>
-                      {app.name}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue placeholder={isFunnel ? 'No app has a dataset yet' : 'All apps in scope'} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {isFunnel ? null : <SelectItem value="all">All apps in scope</SelectItem>}
+                    {(isFunnel ? funnelApps ?? [] : apps).map((app) => (
+                      <SelectItem key={app.id} value={app.id}>
+                        {app.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             ) : null}
 
             {filters.includes('granularity') ? (
               <div className="control">
-                <label htmlFor="granularity">Granularity</label>
-                <select
-                  id="granularity"
+                <Label>Granularity</Label>
+                <Select
                   value={query.granularity}
-                  onChange={(event) =>
-                    patch({ granularity: event.target.value as Granularity })
-                  }
+                  onValueChange={(next) => patch({ granularity: next as Granularity })}
                 >
-                  {GRANULARITIES.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {GRANULARITIES.map((item) => (
+                      <SelectItem key={item.value} value={item.value}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             ) : null}
 
@@ -501,39 +501,47 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
                 disabledTitle={
                   fixedRange ? 'The grouped view covers the last seven days.' : undefined
                 }
-                onChange={(next) => patch({ period: next.period, start: next.start, end: next.end })}
+                onChange={(next) => patch(next)}
               />
             ) : null}
 
             {filters.includes('trials') ? (
               <div className="control">
-                <label htmlFor="trials">Trials in MRR</label>
-                <select
-                  id="trials"
+                <Label>Trials in MRR</Label>
+                <Select
                   value={String(query.includeTrials)}
-                  onChange={(event) => patch({ includeTrials: event.target.value === 'true' })}
+                  onValueChange={(next) => patch({ includeTrials: next === 'true' })}
                 >
-                  <option value="false">Excluded</option>
-                  <option value="true">Included</option>
-                </select>
+                  <SelectTrigger className="w-[160px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="false">Excluded</SelectItem>
+                    <SelectItem value="true">Included</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             ) : null}
 
             {filters.includes('rating') ? (
               <div className="control">
-                <label htmlFor="rating">Rating</label>
-                <select
-                  id="rating"
+                <Label>Rating</Label>
+                <Select
                   value={String(query.rating)}
-                  onChange={(event) => patch({ rating: Number(event.target.value) })}
+                  onValueChange={(next) => patch({ rating: Number(next) })}
                 >
-                  <option value="0">Any rating</option>
-                  {[5, 4, 3, 2, 1].map((value) => (
-                    <option key={value} value={value}>
-                      {value} star{value === 1 ? '' : 's'}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="w-[160px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="0">Any rating</SelectItem>
+                    {[5, 4, 3, 2, 1].map((star) => (
+                      <SelectItem key={star} value={String(star)}>
+                        {star} star{star === 1 ? '' : 's'}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             ) : null}
 
@@ -667,6 +675,8 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
           </p>
         ) : null}
       </main>
-    </div>
+      </SidebarInset>
+    </SidebarProvider>
+    </TooltipProvider>
   );
 }
