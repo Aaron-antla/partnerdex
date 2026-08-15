@@ -417,8 +417,6 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setQuery((current) => ({ ...current, ...changes }));
   }, []);
 
-  // The overview greets; a metric's customer list names the figure; every
-  // other page names itself.
   const heading = page.id === 'overview' ? greeting() : { title: page.title, blurb: page.blurb };
 
   const anyMetric = overview ? Object.values(overview)[0] : undefined;
@@ -433,10 +431,6 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
       <NavToggle />
       <SidebarInset>
       <main className="main">
-        <div className="mb-3 rounded-md border border-dashed border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-          shadcn/ui preview on branch <code>experiment/shadcn-ui</code>. Run{' '}
-          <code>git checkout main</code> to restore the original dashboard.
-        </div>
         <header className="masthead">
           <div>
             <h1>{heading.title}</h1>
