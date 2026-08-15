@@ -369,11 +369,32 @@ export function createApp(): express.Express {
   });
 
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const webRoot = path.resolve(here, '../web');
-  if (fs.existsSync(webRoot)) {
+  // Production (`node dist/cli.js`) lives in dist/server → dist/web.
+  // `tsx` in `npm run dev` lives in src/server, so also look at the built
+  // bundle from the project root. Without this, localhost:8787 is a bare
+  // Express 404 during development.
+  const webRoots = [path.resolve(here, '../web'), path.resolve(here, '../../dist/web')];
+  const webRoot = webRoots.find((dir) => fs.existsSync(path.join(dir, 'index.html')));
+  if (webRoot) {
     app.use(express.static(webRoot));
     app.get('*', (_request, response) => {
       response.sendFile(path.join(webRoot, 'index.html'));
+    });
+  } else {
+    const viteDev = 'http://localhost:5173';
+    app.get('/', (_request, response) => {
+      response.redirect(302, viteDev);
+    });
+    app.get('*', (request, response, next) => {
+      if (request.path.startsWith('/api')) {
+        next();
+        return;
+      }
+      response.status(404).type('html').send(
+        `<!doctype html><meta charset="utf-8"><title>PartnerDex</title>
+<p>The API is running, but the dashboard bundle is not here.</p>
+<p>Open <a href="${viteDev}">${viteDev}</a> during development, or run <code>npm run build</code>.</p>`,
+      );
     });
   }
 
