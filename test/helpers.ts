@@ -63,6 +63,10 @@ export interface SubscriptionFixture {
   test?: boolean;
   /** Extra paid charges after the first, for revenue tests. */
   extraSales?: Array<{ at: string; gross: number }>;
+  /** Charge name as the Partner API returns it. Defaults to a catalog-like "Plan". */
+  planName?: string;
+  /** Gross of the first sale when it is not the contracted amount. */
+  firstSaleGross?: number;
 }
 
 export interface RelationshipEvent {
@@ -89,7 +93,7 @@ export function seed(
   for (const fixture of fixtures) {
     const charge = {
       id: `gid://shopify/AppSubscription/${fixture.chargeRef}`,
-      name: 'Plan',
+      name: fixture.planName ?? 'Plan',
       test: fixture.test ?? false,
       billingOn: fixture.billingOn ?? null,
       amount: { amount: String(fixture.amount), currencyCode: 'USD' },
@@ -132,7 +136,9 @@ export function seed(
     }
 
     const sales = [
-      ...(fixture.firstSaleAt ? [{ at: fixture.firstSaleAt, gross: fixture.amount }] : []),
+      ...(fixture.firstSaleAt
+        ? [{ at: fixture.firstSaleAt, gross: fixture.firstSaleGross ?? fixture.amount }]
+        : []),
       ...(fixture.extraSales ?? []),
     ];
     sales.forEach((sale, index) => {

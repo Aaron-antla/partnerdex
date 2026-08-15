@@ -30,6 +30,7 @@ import { funnelReport } from '../metrics/reports/funnel.js';
 /** Everything the dashboard renders, so one request paints the whole page. */
 const HEADLINE_METRICS = [
   'mrr',
+  'discounted_mrr',
   'arr',
   'gross_earnings',
   'mrr_growth',

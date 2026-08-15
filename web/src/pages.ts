@@ -83,13 +83,20 @@ const OVERVIEW: PageSpec = {
   id: 'overview',
   label: 'Overview',
   title: 'Overview',
-  blurb: 'The five figures that say whether the business is working.',
+  blurb: 'The figures that say whether the business is working.',
   cards: [
     {
       metric: 'mrr',
       label: 'MRR',
       subtitle: 'Recurring revenue live at each point.',
       plot: 'line',
+    },
+    {
+      metric: 'discounted_mrr',
+      label: 'Discounted MRR',
+      subtitle: 'Unique, custom, and catalog charges billed below list.',
+      plot: 'area',
+      breakdown: true,
     },
     {
       metric: 'gross_earnings',
@@ -127,6 +134,13 @@ const REVENUE: PageSpec = {
   blurb: 'What is being earned, how fast it is growing, and what each customer is worth.',
   cards: [
     { metric: 'mrr', label: 'MRR', subtitle: 'Recurring revenue live at each point.', plot: 'line' },
+    {
+      metric: 'discounted_mrr',
+      label: 'Discounted MRR',
+      subtitle: 'Unique, custom, and catalog charges billed below list.',
+      plot: 'area',
+      breakdown: true,
+    },
     { metric: 'arr', label: 'ARR', subtitle: 'Run-rate: MRR × 12.', plot: 'line' },
     {
       metric: 'gross_earnings',
