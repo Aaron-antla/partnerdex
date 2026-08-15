@@ -40,9 +40,12 @@ const TONE = {
 export function MetricCard({
   spec,
   metric,
+  href,
 }: {
   spec: CardSpec;
   metric: MetricResponse | undefined;
+  /** Opens the merchants in this figure. Absent when the metric is not a population. */
+  href?: string;
 }) {
   const [showTable, setShowTable] = useState(false);
 
@@ -73,10 +76,12 @@ export function MetricCard({
   );
   const data = useChartData(breakdown.length > 0 ? breakdown : total);
 
+  const title = href ? <a href={href}>{spec.label}</a> : spec.label;
+
   if (!metric) {
     return (
       <section className={spec.full ? 'card full' : 'card'}>
-        <h2 className="card-label">{spec.label}</h2>
+        <h2 className="card-label">{title}</h2>
         <div className="card-value">—</div>
         <div className="card-delta">Not available</div>
       </section>
@@ -122,7 +127,7 @@ export function MetricCard({
     <section className={spec.full ? 'card full' : 'card'}>
       <div className="card-head">
         <div>
-          <h2 className="card-label">{spec.label}</h2>
+          <h2 className="card-label">{title}</h2>
           {spec.subtitle ? <p className="card-subtitle">{spec.subtitle}</p> : null}
         </div>
         {/* Multi-series cards owe the reader a table: past two series, colour

@@ -71,6 +71,27 @@ export interface PageDefaults {
 
 export type PageFilter = 'app' | 'range' | 'trials' | 'rating' | 'granularity';
 
+/**
+ * Metrics whose headline is a living population, so the card title can open
+ * that list instead of squeezing a table into the chart.
+ */
+export type CustomerMetricFilter = 'discounted' | 'paying' | 'trialing';
+
+export function customerFilterFor(metric: string): CustomerMetricFilter | undefined {
+  switch (metric) {
+    case 'discounted_mrr':
+      return 'discounted';
+    case 'subscribers':
+    case 'mrr':
+    case 'mrr_by_app':
+      return 'paying';
+    case 'on_trial':
+      return 'trialing';
+    default:
+      return undefined;
+  }
+}
+
 /** What a metric page shows when it has not asked for anything different. */
 export const DEFAULT_FILTERS: PageFilter[] = ['app', 'range', 'trials'];
 

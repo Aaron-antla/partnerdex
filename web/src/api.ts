@@ -274,12 +274,15 @@ export interface CustomerApp {
   review: ReviewSummary | null;
 }
 
+export type CustomerListFilter = 'discounted' | 'paying' | 'trialing';
+
 export const fetchCustomers = (options: {
   search?: string;
   sort?: string;
   limit?: number;
   offset?: number;
   appId?: string;
+  filter?: CustomerListFilter;
 }): Promise<CustomerListResult> => {
   const params = new URLSearchParams();
   if (options.search) params.set('q', options.search);
@@ -287,6 +290,7 @@ export const fetchCustomers = (options: {
   if (options.limit) params.set('limit', String(options.limit));
   if (options.offset) params.set('offset', String(options.offset));
   if (options.appId) params.set('appIds', options.appId);
+  if (options.filter) params.set('filter', options.filter);
   return getJson<CustomerListResult>(`/api/customers?${params.toString()}`);
 };
 

@@ -211,6 +211,13 @@ describe('discounted MRR', () => {
     const custom = discounted.series?.find((item) => item.key === 'custom');
     assert.ok(custom);
     assert.equal(custom.data.at(-1)?.value, 1099.98);
+
+    const listed = listCustomers({ filter: 'discounted' });
+    assert.equal(listed.total, 2);
+    assert.deepEqual(
+      listed.customers.map((row) => row.shopId).sort(),
+      ['10', '11'],
+    );
   });
 
   it('counts a catalog plan only after its latest sale falls below list', () => {

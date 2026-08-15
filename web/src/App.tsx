@@ -26,7 +26,7 @@ import { BigQuery } from './components/BigQuery';
 import { Funnel } from './components/Funnel';
 import { Notifications } from './components/Notifications';
 import { UnmatchedReviews } from './components/Reviews';
-import { DEFAULT_FILTERS, metricsFor, pageById } from './pages';
+import { DEFAULT_FILTERS, customerFilterFor, metricsFor, pageById } from './pages';
 
 const PERIODS = [
   { value: 'last_7_days', label: 'Last 7 days' },
@@ -239,6 +239,12 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
 
   const route = useRoute();
   const page = useMemo(() => pageById(route.pageId), [route.pageId]);
+  const metricCard = useMemo(
+    () => (route.param ? page.cards.find((card) => card.metric === route.param) : undefined),
+    [page, route.param],
+  );
+  const customerFilter = metricCard ? customerFilterFor(metricCard.metric) : undefined;
+  const isMetricCustomers = Boolean(customerFilter);
 
   /*
    * A page's declared filter defaults, applied on the way in.
@@ -270,8 +276,10 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
   //
   // The funnel is the odd one: it takes the same filters but fetches its own
   // shape, so it shows the controls without joining the overview request.
-  const isMetrics = !isCustomers && !isNotifications && !isListings && !isBigQuery;
-  const filters = page.filters ?? DEFAULT_FILTERS;
+  // A metric's customer list is live-as-of-now, so the range does not apply;
+  // the app picker still does.
+  const isMetrics = !isCustomers && !isNotifications && !isListings && !isBigQuery && !isMetricCustomers;
+  const filters = isMetricCustomers ? (['app'] as const) : (page.filters ?? DEFAULT_FILTERS);
 
   const [collapsed, setCollapsed] = useState(
     () => window.localStorage.getItem(COLLAPSE_KEY) === '1',
@@ -377,7 +385,10 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
     }
   }, [status]);
 
-  const wanted = useMemo(() => metricsFor(page), [page]);
+  const wanted = useMemo(
+    () => (isMetricCustomers ? [] : metricsFor(page)),
+    [page, isMetricCustomers],
+  );
 
   /**
    * Changing page changes which metrics exist in the response, so the old
@@ -424,8 +435,15 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setQuery((current) => ({ ...current, ...changes }));
   }, []);
 
-  // The overview greets; every other page names itself.
-  const heading = page.id === 'overview' ? greeting() : { title: page.title, blurb: page.blurb };
+  const heading =
+    isMetricCustomers && metricCard
+      ? {
+          title: metricCard.label,
+          blurb: metricCard.subtitle ?? 'Merchants currently in this figure.',
+        }
+      : page.id === 'overview'
+        ? greeting()
+        : { title: page.title, blurb: page.blurb };
 
   const anyMetric = overview ? Object.values(overview)[0] : undefined;
   const interval = anyMetric?.timeSeriesInterval === 'day' ? 'Daily' : 'Monthly';
@@ -439,6 +457,11 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
       <main className="main">
         <header className="masthead">
           <div>
+            {isMetricCustomers ? (
+              <a className="back-link" href={`#/${page.id}`}>
+                ← {page.title}
+              </a>
+            ) : null}
             <h1>{heading.title}</h1>
             <p className="subtitle">{heading.blurb}</p>
           </div>
@@ -448,7 +471,7 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
         {/* Which filters a page shows is declared on the page, because they are
             not universally meaningful: trials say nothing about a listing, and
             a star rating says nothing about revenue. */}
-        {!isMetrics ? null : (
+        {!isMetrics && !isMetricCustomers ? null : (
           <div className="controls">
             {filters.includes('app') ? (
               <div className="control">
@@ -582,6 +605,7 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
         !isReviews &&
         !isBigQuery &&
         !isFunnel &&
+        !isMetricCustomers &&
         status &&
         !hasData ? (
           <div className="notice">
@@ -610,6 +634,10 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
           ) : (
             <Customers appId={query.appId} />
           )
+        ) : null}
+
+        {isMetricCustomers && customerFilter ? (
+          <Customers appId={query.appId} filter={customerFilter} />
         ) : null}
 
         {isNotifications ? <Notifications /> : null}
@@ -661,6 +689,9 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
                 key={`${page.id}:${card.metric}`}
                 spec={card}
                 metric={overview[card.metric]}
+                href={
+                  customerFilterFor(card.metric) ? `#/${page.id}/${card.metric}` : undefined
+                }
               />
             ))}
           </div>

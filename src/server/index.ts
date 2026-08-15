@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getConfig } from '../config.js';
-import { getCustomer, listCustomers, type CustomerSort } from '../customers/index.js';
+import { getCustomer, listCustomers, type CustomerListFilter, type CustomerSort } from '../customers/index.js';
 import { getDb } from '../db/index.js';
 import { type RawMetricQuery } from '../metrics/context.js';
 import { listMetrics, runMetric } from '../metrics/registry.js';
@@ -260,6 +260,7 @@ export function createApp(): express.Express {
           limit: Number.isFinite(limit) ? limit : undefined,
           offset: Number.isFinite(offset) ? offset : undefined,
           appIds: appIds ? appIds.split(',').filter(Boolean) : [],
+          filter: pick('filter') as CustomerListFilter | undefined,
         }),
       );
     } catch (error) {
