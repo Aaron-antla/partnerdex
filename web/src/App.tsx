@@ -27,15 +27,7 @@ import { Funnel } from './components/Funnel';
 import { Notifications } from './components/Notifications';
 import { UnmatchedReviews } from './components/Reviews';
 import { DEFAULT_FILTERS, metricsFor, pageById } from './pages';
-
-const PERIODS = [
-  { value: 'last_7_days', label: 'Last 7 days' },
-  { value: 'last_30_days', label: 'Last 30 days' },
-  { value: 'last_90_days', label: 'Last 90 days' },
-  { value: 'last_12_months', label: 'Last 12 months' },
-  { value: 'year_to_date', label: 'Year to date' },
-  { value: 'all_time', label: 'All time' },
-];
+import { RangeControl } from './components/RangeControl';
 
 /**
  * Funnel column widths.
@@ -230,6 +222,8 @@ export default function App() {
 function Dashboard({ onLogout }: { onLogout?: () => void }) {
   const [query, setQuery] = useState<QueryState>({
     period: 'last_12_months',
+    start: '',
+    end: '',
     appId: '',
     includeUsage: true,
     includeTrials: false,
@@ -501,25 +495,14 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
             ) : null}
 
             {filters.includes('range') ? (
-              <div className="control">
-                <label htmlFor="period">Range</label>
-                <select
-                  id="period"
-                  value={query.period}
-                  /* A grouped week carries its own span, so the range has
-                     nothing left to choose and says so instead of sitting
-                     there looking live. */
-                  disabled={fixedRange}
-                  title={fixedRange ? 'The grouped view covers the last seven days.' : undefined}
-                  onChange={(event) => patch({ period: event.target.value })}
-                >
-                  {PERIODS.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <RangeControl
+                value={{ period: query.period, start: query.start, end: query.end }}
+                disabled={fixedRange}
+                disabledTitle={
+                  fixedRange ? 'The grouped view covers the last seven days.' : undefined
+                }
+                onChange={(next) => patch({ period: next.period, start: next.start, end: next.end })}
+              />
             ) : null}
 
             {filters.includes('trials') ? (
@@ -638,6 +621,8 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
             <Funnel
               appId={query.appId}
               period={query.period}
+              start={query.start}
+              end={query.end}
               granularity={query.granularity}
               key={dataVersion}
             />

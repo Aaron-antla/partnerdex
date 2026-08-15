@@ -1,5 +1,58 @@
 import type { MetricFormat } from './api';
 
+/** Local calendar day as `YYYY-MM-DD`, for date inputs. */
+export function formatYmd(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export function todayYmd(): string {
+  return formatYmd(new Date());
+}
+
+export function daysAgoYmd(days: number, from = new Date()): string {
+  const date = new Date(from);
+  date.setDate(date.getDate() - days);
+  return formatYmd(date);
+}
+
+export function monthsAgoYmd(months: number, from = new Date()): string {
+  const date = new Date(from);
+  date.setMonth(date.getMonth() - months);
+  return formatYmd(date);
+}
+
+export function yearStartYmd(from = new Date()): string {
+  return `${from.getFullYear()}-01-01`;
+}
+
+/** Inclusive calendar bounds a named period covers, for filling the date inputs. */
+export function boundsForPeriod(period: string): { start: string; end: string } {
+  const end = todayYmd();
+  switch (period) {
+    case 'today':
+      return { start: end, end };
+    case 'yesterday': {
+      const start = daysAgoYmd(1);
+      return { start, end: start };
+    }
+    case 'last_7_days':
+      return { start: daysAgoYmd(7), end };
+    case 'last_30_days':
+      return { start: daysAgoYmd(30), end };
+    case 'last_90_days':
+      return { start: daysAgoYmd(90), end };
+    case 'last_12_months':
+      return { start: monthsAgoYmd(12), end };
+    case 'year_to_date':
+      return { start: yearStartYmd(), end };
+    default:
+      return { start: daysAgoYmd(30), end };
+  }
+}
+
 /**
  * Compact money for tiles and axes, full precision in tooltips and tables.
  * Currency comes from the data, never a hard-coded locale assumption.

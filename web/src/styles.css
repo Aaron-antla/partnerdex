@@ -493,7 +493,35 @@ h3,
 }
 
 .control input[type='date'] {
-  min-width: 160px;
+  min-width: 0;
+  color-scheme: inherit;
+}
+
+.control input[type='date']::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.control-range {
+  min-width: 220px;
+}
+
+.range-dates {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.range-dates input[type='date'] {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 6px 8px;
+}
+
+.range-dates-sep {
+  color: var(--muted);
+  flex: 0 0 auto;
+  line-height: 1;
 }
 
 .control-note {

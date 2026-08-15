@@ -945,6 +945,84 @@ describe('period resolution', () => {
     });
     assert.equal(window.end.getTime(), now.getTime());
   });
+
+  it('resolves today from midnight to the as-of instant', () => {
+    const now = new Date('2024-07-01T15:30:00Z');
+    const window = resolveWindow({
+      period: 'today',
+      timeZone: 'UTC',
+      allTimeStart: '2020-01-01',
+      now,
+    });
+    assert.equal(window.start.toISOString(), '2024-07-01T00:00:00.000Z');
+    assert.equal(window.end.toISOString(), now.toISOString());
+  });
+
+  it('resolves yesterday as the previous local day, not including today', () => {
+    const window = resolveWindow({
+      period: 'yesterday',
+      timeZone: 'UTC',
+      allTimeStart: '2020-01-01',
+      now: new Date('2024-07-01T15:30:00Z'),
+    });
+    assert.equal(window.start.toISOString(), '2024-06-30T00:00:00.000Z');
+    assert.equal(window.end.toISOString(), '2024-07-01T00:00:00.000Z');
+  });
+
+  it('treats a custom YYYY-MM-DD pair as a closed local-day span', () => {
+    const window = resolveWindow({
+      period: 'custom',
+      start: '2024-03-01',
+      end: '2024-03-31',
+      timeZone: 'UTC',
+      allTimeStart: '2020-01-01',
+      now: new Date('2024-07-01T00:00:00Z'),
+    });
+    assert.equal(window.period, 'custom');
+    assert.equal(window.start.toISOString(), '2024-03-01T00:00:00.000Z');
+    assert.equal(window.end.toISOString(), '2024-04-01T00:00:00.000Z');
+    assert.equal(window.interval, 'day');
+  });
+
+  it('reconstructs a metric over a custom dashboard range', () => {
+    resetEnvironment();
+    seed([
+      {
+        chargeRef: '1',
+        shopId: '10',
+        amount: 40,
+        activatedAt: '2024-03-10T00:00:00Z',
+        firstSaleAt: '2024-03-10T00:00:00Z',
+      },
+    ]);
+
+    const response = runMetric(
+      'mrr',
+      { period: 'custom', start: '2024-03-01', end: '2024-03-31' },
+      { now: NOW },
+    );
+    assert.equal(response.period, 'custom');
+    assert.equal(response.timeSeriesInterval, 'day');
+    assert.equal(pointAt(response, '2024-03-09'), 0);
+    assert.equal(pointAt(response, '2024-03-10'), 40);
+    assert.equal(response.value, 40);
+  });
+
+  it('refuses a custom range that does not move forward', () => {
+    assert.throws(
+      () =>
+        resolveWindow({
+          period: 'custom',
+          start: '2024-04-01',
+          end: '2024-03-01',
+          timeZone: 'UTC',
+          allTimeStart: '2020-01-01',
+          now: new Date('2024-07-01T00:00:00Z'),
+        }),
+      /start of the range must be before its end/,
+    );
+  });
+
 });
 
 describe('as-of history is reconstructed, not stored', () => {

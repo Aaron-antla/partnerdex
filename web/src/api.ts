@@ -82,6 +82,12 @@ export interface QueryState {
    * override it there would put the axis at odds with the figures beside it.
    */
   granularity: Granularity;
+  /**
+   * Inclusive calendar bounds for `period=custom`, as `YYYY-MM-DD`. Empty on
+   * presets — the server measures those backwards from now.
+   */
+  start: string;
+  end: string;
 }
 
 /**
@@ -95,9 +101,10 @@ export function toSearchParams(query: QueryState): URLSearchParams {
     includeUsage: String(query.includeUsage),
     includeTrials: String(query.includeTrials),
   });
-  // No `end` either: the dashboard always reads as of now. The server still
-  // honours the parameter, so an as-of reconstruction stays available to
-  // anything calling the API directly.
+  if (query.period === 'custom') {
+    if (query.start) params.set('start', query.start);
+    if (query.end) params.set('end', query.end);
+  }
   if (query.appId) params.set('appIds', query.appId);
   if (query.rating) params.set('rating', String(query.rating));
   return params;
@@ -500,11 +507,19 @@ export const fetchFunnel = (options: {
   appId?: string;
   period: string;
   granularity: Granularity;
+  start?: string;
+  end?: string;
 }): Promise<FunnelResponse> => {
   const params = new URLSearchParams({ granularity: options.granularity });
   // The range is the granularity's own when the columns are a fixed span; the
   // server ignores a period there, and sending one would imply otherwise.
-  if (options.granularity !== 'previous_7_days') params.set('period', options.period);
+  if (options.granularity !== 'previous_7_days') {
+    params.set('period', options.period);
+    if (options.period === 'custom') {
+      if (options.start) params.set('start', options.start);
+      if (options.end) params.set('end', options.end);
+    }
+  }
   if (options.appId) params.set('appIds', options.appId);
   return getJson<FunnelResponse>(`/api/funnel?${params.toString()}`);
 };

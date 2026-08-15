@@ -9,6 +9,8 @@ export type Interval = 'hour' | 'day' | 'week' | 'month';
 export const INTERVALS: readonly Interval[] = ['hour', 'day', 'week', 'month'];
 
 export const PERIODS = [
+  'today',
+  'yesterday',
   'last_7_days',
   'last_30_days',
   'last_90_days',
@@ -245,6 +247,24 @@ export function resolveWindow(input: ResolveWindowInput): Window {
     start = input.start ? parseBoundary(input.start, timeZone, 'start') : addDays(anchor, -30);
   } else {
     switch (period) {
+      case 'today': {
+        const wall = wallClockIn(anchor, timeZone);
+        start = instantFromWallClock(
+          { year: wall.year, month: wall.month, day: wall.day, hour: 0, minute: 0, second: 0 },
+          timeZone,
+        );
+        break;
+      }
+      case 'yesterday': {
+        const wall = wallClockIn(anchor, timeZone);
+        const todayStart = instantFromWallClock(
+          { year: wall.year, month: wall.month, day: wall.day, hour: 0, minute: 0, second: 0 },
+          timeZone,
+        );
+        start = addDays(todayStart, -1);
+        end = todayStart;
+        break;
+      }
       case 'last_7_days':
         start = addDays(anchor, -7);
         break;
