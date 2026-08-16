@@ -119,7 +119,7 @@ export function toSearchParams(query: QueryState): URLSearchParams {
 export const SIGNED_OUT_EVENT = 'partnerdex:signed-out';
 
 const API_UNAVAILABLE_MESSAGE =
-  'The dashboard API is not on this Worker. PartnerDex metrics run in the Node process (npm start, or Fly.io in DEPLOY.md).';
+  'The dashboard API is not on this Worker. Antla Analytics metrics run in the Node process (npm start, or Fly.io in DEPLOY.md).';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);

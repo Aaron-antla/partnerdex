@@ -393,7 +393,7 @@ export function createApp(): express.Express {
         return;
       }
       response.status(404).type('html').send(
-        `<!doctype html><meta charset="utf-8"><title>PartnerDex</title>
+        `<!doctype html><meta charset="utf-8"><title>Antla Analytics</title>
 <p>The API is running, but the dashboard bundle is not here.</p>
 <p>Open <a href="${viteDev}">${viteDev}</a> during development, or run <code>npm run build</code>.</p>`,
       );

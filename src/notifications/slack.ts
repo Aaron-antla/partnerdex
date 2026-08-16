@@ -407,13 +407,13 @@ export async function postToSlack(url: string, message: SlackMessage): Promise<P
 /** The message the "Send a test" button delivers. */
 export function buildTestMessage(channelName: string): SlackMessage {
   return {
-    text: `partnerdex is connected to ${channelName}.`,
+    text: `Antla Analytics is connected to ${channelName}.`,
     blocks: [
       {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `:white_check_mark: *partnerdex is connected.*\nThis is a test message for *${escapeMrkdwn(
+          text: `:white_check_mark: *Antla Analytics is connected.*\nThis is a test message for *${escapeMrkdwn(
             channelName,
           )}*. Subscription events will arrive here after the next sync.`,
         },

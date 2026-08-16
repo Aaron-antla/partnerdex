@@ -1,5 +1,5 @@
 const API_UNAVAILABLE_MESSAGE =
-  'The dashboard API is not on this Worker. PartnerDex metrics run in the Node process (npm start, or Fly.io in DEPLOY.md).';
+  'The dashboard API is not on this Worker. Antla Analytics metrics run in the Node process (npm start, or Fly.io in DEPLOY.md).';
 
 export default {
   fetch(request, env) {

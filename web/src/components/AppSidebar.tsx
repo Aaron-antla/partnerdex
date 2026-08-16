@@ -95,7 +95,7 @@ export function AppSidebar({
         <div className="flex items-center gap-2.5">
           <Logo />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[15px] font-semibold tracking-[-0.02em]">PartnerDex</p>
+            <p className="truncate text-[15px] font-semibold tracking-[-0.02em]">Antla Analytics</p>
             <p className="truncate text-[10px] font-medium tracking-[0.16em] text-muted-foreground uppercase">
               Shopify partners
             </p>

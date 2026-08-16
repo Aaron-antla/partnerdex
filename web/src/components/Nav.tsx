@@ -66,9 +66,9 @@ export function Nav({
       <div className="nav-head">
         {/* The mark survives the collapse; the wordmark beside it does not, so
             a narrow rail still says whose dashboard this is. */}
-        <span className="nav-identity" title={collapsed ? 'PartnerDex' : undefined}>
+        <span className="nav-identity" title={collapsed ? 'Antla Analytics' : undefined}>
           <Logo />
-          <span className="nav-brand">PartnerDex</span>
+          <span className="nav-brand">Antla Analytics</span>
         </span>
         <button
           type="button"
