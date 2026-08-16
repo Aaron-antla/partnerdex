@@ -83,7 +83,7 @@ PartnerDex is designed to run as a single-node process on a single machine with 
 
 For quick and easy production deployment using Fly.io, refer to the detailed guide in [DEPLOY.md](DEPLOY.md).
 
-You can host the Vite dashboard as static assets on Workers Builds. The Express API and the SQLite store cannot run on Workers. `/api` is not deployed, so the dashboard shell loads and data requests fail. Keep production data on the Node process described in [DEPLOY.md](DEPLOY.md).
+You can host the Vite dashboard as static assets on Workers Builds. The Express API and the SQLite store cannot run on Workers. The Worker returns a JSON `503` response for `/api` requests instead of the SPA shell. Metrics still need the Node process described in [DEPLOY.md](DEPLOY.md).
 
 ### Host the dashboard on Workers Builds
 

@@ -118,6 +118,9 @@ export function toSearchParams(query: QueryState): URLSearchParams {
  */
 export const SIGNED_OUT_EVENT = 'partnerdex:signed-out';
 
+const API_UNAVAILABLE_MESSAGE =
+  'The dashboard API is not on this Worker. PartnerDex metrics run in the Node process (npm start, or Fly.io in DEPLOY.md).';
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   // The login endpoint answers 401 for a wrong password; that is an answer to a
@@ -137,7 +140,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   }
   // 204 on delete: there is no body to parse.
   if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+  const contentType = response.headers.get('content-type') ?? '';
+  const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase();
+  const body = await response.text();
+  const isJson = mediaType === 'application/json' || mediaType?.endsWith('+json');
+  const isHtml = body.trimStart().startsWith('<');
+
+  if (!isJson || isHtml) throw new Error(API_UNAVAILABLE_MESSAGE);
+
+  return JSON.parse(body) as T;
 }
 
 const getJson = <T,>(url: string): Promise<T> => request<T>(url);

@@ -1,12 +1,15 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "partnerdex",
+  "main": "./worker/index.ts",
   "compatibility_date": "2026-08-16",
   "observability": {
     "enabled": true
   },
   "assets": {
     "directory": "./dist/web",
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
   }
 }

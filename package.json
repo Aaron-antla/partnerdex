@@ -24,7 +24,7 @@
     "doctor": "tsx src/cli.ts doctor",
     "validate": "tsx src/cli.ts validate",
     "start": "node dist/cli.js serve",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
     "test": "node --test --import tsx test/*.test.ts"
   },
   "dependencies": {
