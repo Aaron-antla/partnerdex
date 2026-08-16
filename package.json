@@ -14,6 +14,8 @@
     "build": "npm run build:server && npm run build:web",
     "build:server": "tsc -p tsconfig.json",
     "build:web": "vite build",
+    "preview": "npm run build:web && wrangler dev",
+    "deploy": "npm run build:web && wrangler deploy",
     "dev": "concurrently -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "tsx watch src/cli.ts serve",
     "dev:web": "vite",
@@ -54,6 +56,7 @@
     "recharts": "^3.8.0",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
-    "vite": "^6.4.3"
+    "vite": "^6.4.3",
+    "wrangler": "^4.123.0"
   }
 }

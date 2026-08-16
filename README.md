@@ -83,6 +83,14 @@ PartnerDex is designed to run as a single-node process on a single machine with 
 
 For quick and easy production deployment using Fly.io, refer to the detailed guide in [DEPLOY.md](DEPLOY.md).
 
+You can host the Vite dashboard as static assets on Workers Builds. The Express API and the SQLite store cannot run on Workers. `/api` is not deployed, so the dashboard shell loads and data requests fail. Keep production data on the Node process described in [DEPLOY.md](DEPLOY.md).
+
+### Host the dashboard on Workers Builds
+
+In the Cloudflare dashboard, set **Build command** to `npm run build:web`. Set **Deploy command** to `npx wrangler deploy`. If **Build command** already ran, do not set **Deploy command** to `npm run deploy`. That rebuilds twice.
+
+`wrangler.jsonc` is the source of truth for the asset directory (`dist/web`). A dashboard output directory of `dist` is wrong.
+
 ---
 
 ## 4. Details and customizations
