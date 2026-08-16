@@ -355,9 +355,9 @@ const LISTINGS: PageSpec = {
 
 const NOTIFICATIONS: PageSpec = {
   id: 'notifications',
-  label: 'Notifications',
-  title: 'Notifications',
-  blurb: 'Send customer events to Slack as they happen, instead of noticing them a week later.',
+  label: 'Slack',
+  title: 'Slack',
+  blurb: 'Send a Slack message when a merchant installs, changes plan, or leaves.',
   kind: 'notifications',
   cards: [],
 };

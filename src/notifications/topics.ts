@@ -30,6 +30,9 @@ export interface EventPresentation {
  * one fact that made the message worth reading.
  */
 export const EVENT_PRESENTATION: Record<string, EventPresentation> = {
+  installed: { headline: 'App installed', emoji: ':package:', tone: 'good' },
+  reinstalled: { headline: 'App reinstalled', emoji: ':repeat:', tone: 'good' },
+  uninstalled: { headline: 'App uninstalled', emoji: ':door:', tone: 'bad' },
   subscribed: { headline: 'Subscription started', emoji: ':tada:', tone: 'good' },
   resubscribed: { headline: 'Subscription restarted', emoji: ':repeat:', tone: 'good' },
   trial_started: { headline: 'Trial started', emoji: ':seedling:', tone: 'good' },
@@ -64,11 +67,48 @@ export interface NotificationTopic {
   covers: readonly string[];
 }
 
+export const APP_INSTALL_EVENTS: NotificationTopic = {
+  key: 'app_install_events',
+  label: 'Installs',
+  description: 'A merchant added the app. The plan they signed up to is included when it happened in the same moment.',
+  eventTypes: ['installed', 'reinstalled'],
+  covers: ['App installed', 'App reinstalled'],
+};
+
+export const APP_UPGRADE_EVENTS: NotificationTopic = {
+  key: 'app_upgrade_events',
+  label: 'Upgrades',
+  description: 'A merchant moved to a higher plan, or to a more expensive billing cadence.',
+  eventTypes: ['upgraded'],
+  covers: ['Subscription upgraded'],
+};
+
+export const APP_DOWNGRADE_EVENTS: NotificationTopic = {
+  key: 'app_downgrade_events',
+  label: 'Downgrades',
+  description: 'A merchant moved to a lower plan, or to a cheaper billing cadence.',
+  eventTypes: ['downgraded'],
+  covers: ['Subscription downgraded'],
+};
+
+export const APP_UNINSTALL_EVENTS: NotificationTopic = {
+  key: 'app_uninstall_events',
+  label: 'Uninstalls',
+  description: 'A merchant removed the app. Cancelling a subscription while keeping the app is a different toggle.',
+  eventTypes: ['uninstalled'],
+  covers: ['App uninstalled'],
+};
+
+/**
+ * Trials, freezes, first paid starts, and subscription cancels that are not an
+ * uninstall. Used to live on `app_subscription_events` with upgrades and
+ * downgrades; that key is rewritten on read (see `migrateLegacySubscriptionTopics`).
+ */
 export const APP_SUBSCRIPTION_EVENTS: NotificationTopic = {
-  key: 'app_subscription_events',
-  label: 'App Subscription Events',
+  key: 'app_other_subscription_events',
+  label: 'Other subscription events',
   description:
-    'Every change to what a merchant is paying you: a subscription starting, ending, pausing, or moving tier.',
+    'Trials, freezes, a first paid start, and a subscription cancelled while the app is still installed.',
   eventTypes: [
     'subscribed',
     'resubscribed',
@@ -78,8 +118,6 @@ export const APP_SUBSCRIPTION_EVENTS: NotificationTopic = {
     'unsubscribed',
     'subscription_frozen',
     'subscription_unfrozen',
-    'upgraded',
-    'downgraded',
   ],
   covers: [
     'Subscription started (including trial started)',
@@ -88,10 +126,11 @@ export const APP_SUBSCRIPTION_EVENTS: NotificationTopic = {
     'Subscription cancelled',
     'Subscription frozen',
     'Subscription unfrozen',
-    'Subscription upgraded',
-    'Subscription downgraded',
   ],
 };
+
+/** Pre-split topic. Expanded once into installs-off, upgrades, downgrades, and other. */
+export const LEGACY_APP_SUBSCRIPTION_TOPIC = 'app_subscription_events';
 
 /**
  * Reviews, which the Partner API knows nothing about.
@@ -115,7 +154,14 @@ export const APP_REVIEW_EVENTS: NotificationTopic = {
   ],
 };
 
-export const TOPICS: NotificationTopic[] = [APP_SUBSCRIPTION_EVENTS, APP_REVIEW_EVENTS];
+export const TOPICS: NotificationTopic[] = [
+  APP_INSTALL_EVENTS,
+  APP_UPGRADE_EVENTS,
+  APP_DOWNGRADE_EVENTS,
+  APP_UNINSTALL_EVENTS,
+  APP_SUBSCRIPTION_EVENTS,
+  APP_REVIEW_EVENTS,
+];
 
 export function topicByKey(key: string): NotificationTopic | undefined {
   return TOPICS.find((topic) => topic.key === key);

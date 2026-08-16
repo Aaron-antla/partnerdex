@@ -1,6 +1,6 @@
 import { getDb, type Db } from '../db/index.js';
 import { resolveScopedAppIds } from '../sync/index.js';
-import { listChannels, recordDeliveryOutcome, webhookUrlFor } from './store.js';
+import { listChannels, migrateLegacySubscriptionTopics, recordDeliveryOutcome, webhookUrlFor } from './store.js';
 import { buildMessage, postToSlack, type SubscriptionNotice } from './slack.js';
 import { topicByKey } from './topics.js';
 import { getConfig } from '../config.js';
@@ -118,15 +118,26 @@ function stalenessCutoffs(now: Date): { instant: string; dayStamped: string } {
 function pendingFor(
   db: Db,
   channelId: string,
-  eventTypes: readonly string[],
-  enabledAt: string,
+  slices: Array<{ eventTypes: readonly string[]; enabledAt: string }>,
   appIds: string[],
   now: Date,
 ): PendingRow[] {
-  const typeList = eventTypes.map((_, i) => `@type${i}`).join(', ');
-  const params: Record<string, unknown> = { channelId, enabledAt, cap: MAX_PER_CHANNEL_PER_RUN };
-  eventTypes.forEach((type, i) => {
-    params[`type${i}`] = type;
+  const live = slices.filter((slice) => slice.eventTypes.length > 0);
+  if (live.length === 0) return [];
+
+  const params: Record<string, unknown> = { channelId, cap: MAX_PER_CHANNEL_PER_RUN };
+  const typeConds: string[] = [];
+  let typeIndex = 0;
+  live.forEach((slice, sliceIndex) => {
+    const names = slice.eventTypes.map((type) => {
+      const key = `type${typeIndex}`;
+      typeIndex += 1;
+      params[key] = type;
+      return `@${key}`;
+    });
+    const atKey = `enabled${sliceIndex}`;
+    params[atKey] = slice.enabledAt;
+    typeConds.push(`(e.type IN (${names.join(', ')}) AND e.occurred_at > @${atKey})`);
   });
 
   const cutoffs = stalenessCutoffs(now);
@@ -159,8 +170,7 @@ function pendingFor(
          LEFT JOIN subscriptions sub ON sub.charge_id = e.charge_id
          LEFT JOIN subscriptions prev ON prev.charge_id = e.prev_charge_id
         WHERE e.suppressed = 0
-          AND e.type IN (${typeList})
-          AND e.occurred_at > @enabledAt
+          AND (${typeConds.join(' OR ')})
           AND e.occurred_at >
               CASE WHEN e.type = @dayStamped THEN @freshEnoughDayStamped ELSE @freshEnough END
           AND e.app_id ${inScope}
@@ -184,6 +194,65 @@ function pendingFor(
     if (trimmed.length > 0) return trimmed;
   }
   return rows;
+}
+
+const PLAN_COMPANION_TYPES = ['subscribed', 'resubscribed', 'trial_started'] as const;
+
+/**
+ * An install row has no charge id, so the plan lives on a subscribed or trial
+ * row at the same instant. Pull those companions even when their own topic is
+ * off, so an Installs-only channel still quotes the plan they signed up to.
+ */
+function attachInstallCompanions(db: Db, channelId: string, rows: PendingRow[]): PendingRow[] {
+  const installs = rows.filter((row) => row.type === 'installed' || row.type === 'reinstalled');
+  if (installs.length === 0) return rows;
+
+  const seen = new Set(rows.map((row) => row.event_id));
+  const extra: PendingRow[] = [];
+  const select = db.prepare(
+    `SELECT e.event_id, e.type, e.occurred_at, e.shop_id, e.app_id, e.charge_id,
+            e.plan_name, e.net_change, e.currency, e.detail,
+            sh.name AS shop_name,
+            sh.myshopify_domain AS shop_domain,
+            ap.name AS app_name,
+            sub.amount AS amount,
+            sub.billing_interval AS billing_interval,
+            sub.trial_ends_at AS trial_ends_at,
+            prev.plan_name AS prev_plan_name,
+            prev.amount AS prev_amount,
+            prev.billing_interval AS prev_billing_interval
+       FROM customer_events e
+       LEFT JOIN shops sh ON sh.id = e.shop_id
+       LEFT JOIN apps ap ON ap.id = e.app_id
+       LEFT JOIN subscriptions sub ON sub.charge_id = e.charge_id
+       LEFT JOIN subscriptions prev ON prev.charge_id = e.prev_charge_id
+      WHERE e.suppressed = 0
+        AND e.shop_id = ?
+        AND e.app_id = ?
+        AND e.occurred_at = ?
+        AND e.type IN (${PLAN_COMPANION_TYPES.map(() => '?').join(', ')})
+        AND NOT EXISTS (
+              SELECT 1 FROM notification_deliveries d
+               WHERE d.channel_id = ? AND d.event_id = e.event_id
+            )`,
+  );
+
+  for (const install of installs) {
+    const found = select.all(
+      install.shop_id,
+      install.app_id,
+      install.occurred_at,
+      ...PLAN_COMPANION_TYPES,
+      channelId,
+    ) as PendingRow[];
+    for (const row of found) {
+      if (seen.has(row.event_id)) continue;
+      seen.add(row.event_id);
+      extra.push(row);
+    }
+  }
+
+  return extra.length === 0 ? rows : [...rows, ...extra];
 }
 
 export interface Notice {
@@ -245,6 +314,8 @@ function parseDetail(raw: string | null): Record<string, unknown> | null {
  */
 export function collapse(rows: PendingRow[]): Notice[] {
   const STARTS = new Set(['subscribed', 'resubscribed']);
+  const INSTALLS = new Set(['installed', 'reinstalled']);
+  const PLAN_STARTS = new Set(['subscribed', 'resubscribed', 'trial_started']);
 
   const groups = new Map<string, PendingRow[]>();
   const order: string[] = [];
@@ -277,7 +348,56 @@ export function collapse(rows: PendingRow[]): Notice[] {
     }
   }
 
-  return notices;
+  return foldInstallsIntoPlanStarts(notices, INSTALLS, PLAN_STARTS);
+}
+
+/**
+ * An install and a trial or first charge at the same instant are one merchant
+ * action. The install row has no charge id, so the charge grouping above cannot
+ * see them together. Prefer the install headline and take the plan from the
+ * paid/trial row.
+ */
+function foldInstallsIntoPlanStarts(
+  notices: Notice[],
+  installs: Set<string>,
+  planStarts: Set<string>,
+): Notice[] {
+  const buckets = new Map<string, Notice[]>();
+  const order: string[] = [];
+  for (const notice of notices) {
+    const key = `${notice.notice.appId}|${notice.notice.shopId}|${notice.notice.occurredAt}`;
+    const existing = buckets.get(key);
+    if (existing) {
+      existing.push(notice);
+    } else {
+      buckets.set(key, [notice]);
+      order.push(key);
+    }
+  }
+
+  const folded: Notice[] = [];
+  for (const key of order) {
+    const bucket = buckets.get(key)!;
+    const install = bucket.find((item) => installs.has(item.notice.type));
+    const plan = bucket.find((item) => planStarts.has(item.notice.type));
+    if (!install || !plan || install === plan) {
+      folded.push(...bucket);
+      continue;
+    }
+
+    folded.push({
+      notice: {
+        ...plan.notice,
+        type: install.notice.type,
+        eventId: install.notice.eventId,
+      },
+      eventIds: [...new Set([...install.eventIds, ...plan.eventIds])],
+    });
+    for (const item of bucket) {
+      if (item !== install && item !== plan) folded.push(item);
+    }
+  }
+  return folded;
 }
 
 export interface DispatchSummary {
@@ -321,10 +441,10 @@ async function dispatchChannel(
   const url = webhookUrlFor(channel.id, db);
   if (!url) return;
 
+  const slices: Array<{ eventTypes: readonly string[]; enabledAt: string }> = [];
   for (const topicKey of channel.topics) {
     const topic = topicByKey(topicKey);
     if (!topic) continue;
-
     const enabledAt = (
       db
         .prepare(
@@ -333,11 +453,17 @@ async function dispatchChannel(
         .get(channel.id, topicKey) as { enabled_at: string } | undefined
     )?.enabled_at;
     if (!enabledAt) continue;
+    slices.push({ eventTypes: topic.eventTypes, enabledAt });
+  }
 
-    const rows = pendingFor(db, channel.id, topic.eventTypes, enabledAt, appIds, now);
-    if (rows.length === 0) continue;
+  const rows = attachInstallCompanions(
+    db,
+    channel.id,
+    pendingFor(db, channel.id, slices, appIds, now),
+  );
+  if (rows.length === 0) return;
 
-    for (const { notice, eventIds } of collapse(rows)) {
+  for (const { notice, eventIds } of collapse(rows)) {
       const result = await postToSlack(url, buildMessage(notice));
 
       if (result.ok) {
@@ -366,7 +492,6 @@ async function dispatchChannel(
       );
       return;
     }
-  }
 }
 
 let inFlight: Promise<DispatchSummary> | null = null;
@@ -389,6 +514,7 @@ export function dispatchPending(
 }
 
 async function run(db: Db, now: Date): Promise<DispatchSummary> {
+  migrateLegacySubscriptionTopics(db);
   const channels = listChannels(db).filter((channel) => channel.topics.length > 0);
   if (channels.length === 0) return { ...EMPTY };
 

@@ -1,6 +1,13 @@
 import crypto from 'node:crypto';
 import { getDb, type Db } from '../db/index.js';
-import { topicByKey, TOPICS } from './topics.js';
+import {
+  APP_DOWNGRADE_EVENTS,
+  APP_SUBSCRIPTION_EVENTS,
+  APP_UPGRADE_EVENTS,
+  LEGACY_APP_SUBSCRIPTION_TOPIC,
+  topicByKey,
+  TOPICS,
+} from './topics.js';
 
 /**
  * Channels and their subscriptions.
@@ -96,6 +103,41 @@ function summarize(row: ChannelRow, topics: string[]): ChannelSummary {
   };
 }
 
+/**
+ * One-shot rewrite of the old all-in-one subscription topic.
+ *
+ * Installs and uninstalls were never in that blob, so they stay off. The same
+ * `enabled_at` is copied so a channel that has been live for months does not
+ * replay upgrades as news. Idempotent: the legacy row is deleted, so a later
+ * disable of upgrades is not undone the next time the page loads.
+ */
+export function migrateLegacySubscriptionTopics(db: Db): void {
+  const rows = db
+    .prepare(
+      'SELECT channel_id, enabled_at FROM notification_subscriptions WHERE topic = ?',
+    )
+    .all(LEGACY_APP_SUBSCRIPTION_TOPIC) as Array<{ channel_id: string; enabled_at: string }>;
+  if (rows.length === 0) return;
+
+  const insert = db.prepare(
+    `INSERT INTO notification_subscriptions (channel_id, topic, enabled_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(channel_id, topic) DO NOTHING`,
+  );
+  const drop = db.prepare(
+    'DELETE FROM notification_subscriptions WHERE channel_id = ? AND topic = ?',
+  );
+  const write = db.transaction(() => {
+    for (const row of rows) {
+      insert.run(row.channel_id, APP_SUBSCRIPTION_EVENTS.key, row.enabled_at);
+      insert.run(row.channel_id, APP_UPGRADE_EVENTS.key, row.enabled_at);
+      insert.run(row.channel_id, APP_DOWNGRADE_EVENTS.key, row.enabled_at);
+      drop.run(row.channel_id, LEGACY_APP_SUBSCRIPTION_TOPIC);
+    }
+  });
+  write();
+}
+
 function topicsByChannel(db: Db): Map<string, string[]> {
   const rows = db
     .prepare('SELECT channel_id, topic FROM notification_subscriptions')
@@ -113,6 +155,7 @@ function topicsByChannel(db: Db): Map<string, string[]> {
 }
 
 export function listChannels(db: Db = getDb()): ChannelSummary[] {
+  migrateLegacySubscriptionTopics(db);
   const rows = db
     .prepare('SELECT * FROM notification_channels ORDER BY created_at')
     .all() as ChannelRow[];
@@ -121,6 +164,7 @@ export function listChannels(db: Db = getDb()): ChannelSummary[] {
 }
 
 export function getChannel(id: string, db: Db = getDb()): ChannelSummary | null {
+  migrateLegacySubscriptionTopics(db);
   const row = db.prepare('SELECT * FROM notification_channels WHERE id = ?').get(id) as
     | ChannelRow
     | undefined;

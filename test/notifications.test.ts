@@ -7,12 +7,13 @@ import {
   createChannel,
   getChannel,
   listChannels,
+  migrateLegacySubscriptionTopics,
   normalizeWebhookUrl,
   NotificationError,
   setTopic,
   webhookHint,
 } from '../src/notifications/store.js';
-import { APP_REVIEW_EVENTS, APP_SUBSCRIPTION_EVENTS } from '../src/notifications/topics.js';
+import { APP_DOWNGRADE_EVENTS, APP_INSTALL_EVENTS, APP_REVIEW_EVENTS, APP_SUBSCRIPTION_EVENTS, APP_UNINSTALL_EVENTS, APP_UPGRADE_EVENTS, LEGACY_APP_SUBSCRIPTION_TOPIC } from '../src/notifications/topics.js';
 import { APP_ID, resetEnvironment, seed, seedForApp } from './helpers.js';
 
 /**
@@ -54,18 +55,18 @@ const ok = () => new Response('ok', { status: 200 });
  * `now`, so without this the correct answer to every test would be "sends
  * nothing" — which is the behaviour the first test pins down deliberately.
  */
-function watermark(db: Db, channelId: string, at: string): void {
+function watermark(db: Db, channelId: string, at: string, topic = TOPIC): void {
   db.prepare(
     'UPDATE notification_subscriptions SET enabled_at = ? WHERE channel_id = ? AND topic = ?',
-  ).run(at, channelId, TOPIC);
+  ).run(at, channelId, topic);
 }
 
-function channelWithTopic(db: Db, name = '#revenue'): string {
+function channelWithTopic(db: Db, name = '#revenue', topic = TOPIC): string {
   const channel = createChannel(
     { name, webhookUrl: 'https://hooks.slack.com/services/T1/B1/secret123' },
     db,
   );
-  setTopic(channel.id, TOPIC, true, db);
+  setTopic(channel.id, topic, true, db);
   return channel.id;
 }
 
@@ -261,6 +262,7 @@ describe('what a channel is told', () => {
     const rendered = JSON.stringify(sent[0]!.blocks);
     assert.match(rendered, /Shop 1/);
     assert.match(rendered, /s1\.example/);
+    assert.match(rendered, /<https:\/\/s1\.example\|/);
     assert.match(rendered, /Test App/);
     assert.match(rendered, /Plan/);
     assert.match(rendered, /\$29\.00\/mo/);
@@ -350,8 +352,8 @@ describe('what a channel is told', () => {
         firstSaleAt: '2024-04-01T00:00:00Z',
       },
     ]);
-    const channelId = channelWithTopic(db);
-    watermark(db, channelId, '2024-03-15T00:00:00Z');
+    const channelId = channelWithTopic(db, '#revenue', APP_UPGRADE_EVENTS.key);
+    watermark(db, channelId, '2024-03-15T00:00:00Z', APP_UPGRADE_EVENTS.key);
     stubFetch(ok);
 
     await dispatchPending(db);
@@ -668,5 +670,164 @@ describe('message rendering', () => {
       });
       assert.match(message.text, /^Subscription downgraded:/);
     });
+  });
+
+  it('links the shop to its myshopify URL', () => {
+    const rendered = JSON.stringify(buildMessage(base).blocks);
+    assert.match(rendered, /<https:\/\/acme\.myshopify\.com\|Acme Store>/);
+  });
+});
+
+describe('installs, upgrades, downgrades and uninstalls as separate toggles', () => {
+  it('announces an install with the plan when they signed up in the same moment', async () => {
+    const db = seed(
+      [
+        {
+          chargeRef: 'c1',
+          shopId: '1',
+          amount: 29,
+          activatedAt: '2024-03-01T00:00:00Z',
+          billingOn: '2024-03-15T00:00:00Z',
+          firstSaleAt: '2024-03-15T00:00:00Z',
+        },
+      ],
+      { installs: [{ shopId: '1', at: '2024-03-01T00:00:00Z' }] },
+    );
+    const channelId = channelWithTopic(db, '#revenue', APP_INSTALL_EVENTS.key);
+    watermark(db, channelId, '2024-01-01T00:00:00Z', APP_INSTALL_EVENTS.key);
+    stubFetch(ok);
+
+    await dispatchPending(db);
+
+    assert.deepEqual(headlines(), ['App installed']);
+    assert.match(JSON.stringify(sent[0]!.blocks), /\$29\.00\/mo/);
+  });
+
+  it('does not send an install when only the leftover subscription topic is on', async () => {
+    const db = seed(
+      [{ chargeRef: 'c1', shopId: '1', amount: 29, activatedAt: '2024-03-01T00:00:00Z', firstSaleAt: '2024-03-01T00:00:00Z' }],
+      { installs: [{ shopId: '1', at: '2024-03-01T00:00:00Z' }] },
+    );
+    const channelId = channelWithTopic(db);
+    watermark(db, channelId, '2024-01-01T00:00:00Z');
+    stubFetch(ok);
+
+    await dispatchPending(db);
+
+    assert.ok(!headlines().includes('App installed'));
+  });
+
+  it('sends an uninstall and not a subscription cancel for removing the app', async () => {
+    const db = seed(
+      [
+        {
+          chargeRef: 'c1',
+          shopId: '1',
+          amount: 29,
+          activatedAt: '2024-03-01T00:00:00Z',
+          firstSaleAt: '2024-03-01T00:00:00Z',
+          churnedAt: '2024-04-01T00:00:00Z',
+        },
+      ],
+      { uninstalls: [{ shopId: '1', at: '2024-04-01T00:00:00Z' }] },
+    );
+    const channelId = channelWithTopic(db, '#revenue', APP_UNINSTALL_EVENTS.key);
+    watermark(db, channelId, '2024-03-15T00:00:00Z', APP_UNINSTALL_EVENTS.key);
+    stubFetch(ok);
+
+    await dispatchPending(db);
+
+    assert.deepEqual(headlines(), ['App uninstalled']);
+  });
+
+  it('does not send an uninstall for a subscription cancel that keeps the app', async () => {
+    const db = seed([
+      {
+        chargeRef: 'c1',
+        shopId: '1',
+        amount: 29,
+        activatedAt: '2024-03-01T00:00:00Z',
+        firstSaleAt: '2024-03-01T00:00:00Z',
+        churnedAt: '2024-04-01T00:00:00Z',
+      },
+    ]);
+    const channelId = channelWithTopic(db, '#revenue', APP_UNINSTALL_EVENTS.key);
+    watermark(db, channelId, '2024-03-15T00:00:00Z', APP_UNINSTALL_EVENTS.key);
+    stubFetch(ok);
+
+    await dispatchPending(db);
+
+    assert.equal(sent.length, 0);
+  });
+
+  it('keeps upgrade and downgrade toggles independent', async () => {
+    const db = seed([
+      {
+        chargeRef: 'c1',
+        shopId: '1',
+        amount: 99,
+        activatedAt: '2024-03-01T00:00:00Z',
+        firstSaleAt: '2024-03-01T00:00:00Z',
+        churnedAt: '2024-04-01T00:00:00Z',
+      },
+      {
+        chargeRef: 'c2',
+        shopId: '1',
+        amount: 29,
+        activatedAt: '2024-04-01T00:00:00Z',
+        firstSaleAt: '2024-04-01T00:00:00Z',
+      },
+    ]);
+    const channelId = channelWithTopic(db, '#revenue', APP_DOWNGRADE_EVENTS.key);
+    watermark(db, channelId, '2024-03-15T00:00:00Z', APP_DOWNGRADE_EVENTS.key);
+    stubFetch(ok);
+
+    await dispatchPending(db);
+
+    assert.deepEqual(headlines(), ['Subscription downgraded']);
+  });
+
+  it('rewrites the legacy subscription topic into other, upgrades and downgrades, not installs', async () => {
+    const db = seed(
+      [
+        {
+          chargeRef: 'c1',
+          shopId: '1',
+          amount: 29,
+          activatedAt: '2024-03-01T00:00:00Z',
+          firstSaleAt: '2024-03-01T00:00:00Z',
+          churnedAt: '2024-04-01T00:00:00Z',
+        },
+        {
+          chargeRef: 'c2',
+          shopId: '1',
+          amount: 99,
+          activatedAt: '2024-04-01T00:00:00Z',
+          firstSaleAt: '2024-04-01T00:00:00Z',
+        },
+      ],
+      { installs: [{ shopId: '1', at: '2024-03-01T00:00:00Z' }] },
+    );
+    const channel = createChannel(
+      { name: '#legacy', webhookUrl: 'https://hooks.slack.com/services/T1/B1/secret123' },
+      db,
+    );
+    db.prepare(
+      'INSERT INTO notification_subscriptions (channel_id, topic, enabled_at) VALUES (?, ?, ?)',
+    ).run(channel.id, LEGACY_APP_SUBSCRIPTION_TOPIC, '2024-03-15T00:00:00Z');
+
+    migrateLegacySubscriptionTopics(db);
+    const topics = listChannels(db).find((row) => row.id === channel.id)!.topics.sort();
+    assert.deepEqual(topics, [
+      APP_DOWNGRADE_EVENTS.key,
+      APP_SUBSCRIPTION_EVENTS.key,
+      APP_UPGRADE_EVENTS.key,
+    ]);
+
+    stubFetch(ok);
+    await dispatchPending(db);
+
+    assert.deepEqual(headlines(), ['Subscription upgraded']);
+    assert.ok(!headlines().includes('App installed'));
   });
 });

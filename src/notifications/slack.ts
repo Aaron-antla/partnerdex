@@ -93,6 +93,22 @@ function shopLabel(notice: SubscriptionNotice): string {
   return notice.shopName ?? notice.shopDomain ?? `Shop ${notice.shopId}`;
 }
 
+/** Storefront host from the Partner API. Never an admin or account URL. */
+export function shopHref(domain: string | null): string | null {
+  if (!domain) return null;
+  const host = domain.replace(/^https?:\/\//i, '').split('/')[0];
+  if (!host) return null;
+  return `https://${host}`;
+}
+
+function shopField(notice: SubscriptionNotice): { type: 'mrkdwn'; text: string } {
+  const name = escapeMrkdwn(shopLabel(notice));
+  const href = shopHref(notice.shopDomain);
+  if (!href) return field('Shop', shopLabel(notice));
+  const host = escapeMrkdwn(notice.shopDomain ?? href);
+  return { type: 'mrkdwn', text: `*Shop*\n<${href}|${name}>\n${host}` };
+}
+
 /** Slack renders `<url|text>`; `*` and `_` in a merchant's name must not. */
 function escapeMrkdwn(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -283,7 +299,7 @@ export function buildMessage(notice: SubscriptionNotice): SlackMessage {
   const plan = planLine(notice.planName, notice.amount, notice.billingInterval, notice.currency);
 
   const fields = [
-    field('Shop', notice.shopDomain ? `${shop}\n${notice.shopDomain}` : shop),
+    shopField(notice),
     field('App', notice.appName ?? notice.appId),
     field('Plan', plan),
     field('MRR', mrrLine(notice)),
