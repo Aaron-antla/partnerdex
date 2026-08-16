@@ -447,18 +447,20 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
     <TooltipProvider>
     <SidebarProvider className="min-h-svh">
       <AppSidebar current={page.id} onLogout={onLogout} />
-      <NavToggle />
       <SidebarInset>
       <main className="main">
         <header className="masthead">
-          <div>
-            {isMetricCustomers ? (
-              <a className="back-link" href={`#/${page.id}`}>
-                ← {page.title}
-              </a>
-            ) : null}
-            <h1>{heading.title}</h1>
-            <p className="subtitle">{heading.blurb}</p>
+          <div className="masthead-lead">
+            <NavToggle />
+            <div>
+              {isMetricCustomers ? (
+                <a className="back-link" href={`#/${page.id}`}>
+                  ← {page.title}
+                </a>
+              ) : null}
+              <h1>{heading.title}</h1>
+              <p className="subtitle">{heading.blurb}</p>
+            </div>
           </div>
           <ThemeToggle theme={theme} onToggle={toggleTheme} />
         </header>

@@ -255,14 +255,15 @@ h3,
 }
 
 /*
- * The monogram. Sized here rather than in the component so the rail and the
- * login card can each ask for the size they need from one shape.
+ * The mark. Sized here rather than in the component so the rail and the
+ * login card can each ask for the size they need from one image.
  */
 .brand-mark {
   display: block;
   flex: 0 0 auto;
   width: 26px;
   height: 26px;
+  object-fit: contain;
 }
 
 .nav-identity {
@@ -309,11 +310,15 @@ h3,
   stroke-linejoin: round;
 }
 
+.masthead-lead {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
 .nav-toggle-reopen {
-  position: fixed;
-  top: 16px;
-  left: 10px;
-  z-index: 30;
+  margin-top: 2px;
 }
 
 .nav-group+.nav-group {
