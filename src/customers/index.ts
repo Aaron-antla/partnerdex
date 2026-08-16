@@ -113,7 +113,11 @@ function statusOf(row: SummaryRow, everSubscribed: number): CustomerStatus {
  * `search` matches the merchant's display name or their myshopify domain, which
  * is how a support ticket or a Partner dashboard link identifies them.
  */
-function summarySql(appIds: string[], searching: boolean): { sql: string; params: Record<string, unknown> } {
+function summarySql(
+  appIds: string[],
+  searching: boolean,
+  filter?: CustomerListFilter,
+): { sql: string; params: Record<string, unknown> } {
   const live = asOfPredicate(liveOptions(appIds), '@now');
   const appList = appIds.map((_, i) => `@sapp${i}`).join(', ');
   const appParams: Record<string, unknown> = {};
@@ -122,8 +126,25 @@ function summarySql(appIds: string[], searching: boolean): { sql: string; params
   });
   const inScope = appIds.length > 0 ? `IN (${appList})` : 'IS NOT NULL';
 
+  const extraParams: Record<string, unknown> = {};
+  const extraJoins: string[] = [];
+  const extraWhere: string[] = [];
+  if (filter === 'paying') {
+    extraWhere.push('COALESCE(ls.n, 0) > 0');
+  } else if (filter === 'trialing') {
+    extraWhere.push('COALESCE(t.n, 0) > 0');
+  } else if (filter === 'discounted') {
+    const discounted = asOfPredicate({ ...liveOptions(appIds), discountedOnly: true }, '@now');
+    Object.assign(extraParams, discounted.params);
+    extraJoins.push(`INNER JOIN (
+        SELECT DISTINCT s.shop_id AS shop_id
+        FROM subscriptions s
+        WHERE ${discounted.sql}
+      ) ds ON ds.shop_id = m.id`);
+  }
+
   return {
-    params: { ...live.params, ...appParams },
+    params: { ...live.params, ...appParams, ...extraParams },
     sql: `
       WITH matched AS (
         SELECT id, name, myshopify_domain
@@ -196,14 +217,25 @@ function summarySql(appIds: string[], searching: boolean): { sql: string; params
       LEFT JOIN installs i ON i.shop_id = m.id
       LEFT JOIN paid p ON p.shop_id = m.id
       LEFT JOIN seen se ON se.shop_id = m.id
+      ${extraJoins.join('\n      ')}
       -- A shop the feed never mentioned in scope is not a customer of these
       -- apps; it arrived on some other app's transaction.
-      WHERE se.shop_id IS NOT NULL OR i.shop_id IS NOT NULL OR p.shop_id IS NOT NULL
+      WHERE (se.shop_id IS NOT NULL OR i.shop_id IS NOT NULL OR p.shop_id IS NOT NULL)
+        ${extraWhere.length > 0 ? `AND ${extraWhere.join(' AND ')}` : ''}
     `,
   };
 }
 
 export type CustomerSort = 'mrr' | 'lifetime' | 'recent' | 'name';
+
+/**
+ * A metric card's population, not a search. Paying and trial are statuses the
+ * list already computes; discounted reuses the same as-of predicate Discounted
+ * MRR is built on, so the merchants on that page are the ones in the figure.
+ */
+export type CustomerListFilter = 'discounted' | 'paying' | 'trialing';
+
+const FILTERS = new Set<CustomerListFilter>(['discounted', 'paying', 'trialing']);
 
 const ORDER_BY: Record<CustomerSort, string> = {
   mrr: 'mrr DESC, lifetimeGross DESC, name ASC',
@@ -218,6 +250,7 @@ export function listCustomers(options: {
   offset?: number;
   sort?: CustomerSort;
   appIds?: string[];
+  filter?: CustomerListFilter;
 } = {}): CustomerListResult {
   const db = getDb();
   const appIds = scope(db, options.appIds ?? []);
@@ -225,8 +258,9 @@ export function listCustomers(options: {
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
   const offset = Math.max(options.offset ?? 0, 0);
   const sort = ORDER_BY[options.sort ?? 'mrr'] ? (options.sort ?? 'mrr') : 'mrr';
+  const filter = options.filter && FILTERS.has(options.filter) ? options.filter : undefined;
 
-  const built = summarySql(appIds, search.length > 0);
+  const built = summarySql(appIds, search.length > 0, filter);
   const params: Record<string, unknown> = {
     ...built.params,
     now: new Date().toISOString(),

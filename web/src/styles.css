@@ -687,6 +687,15 @@ h3,
   color: var(--text-secondary);
 }
 
+.card-label a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.card-label a:hover {
+  text-decoration: underline;
+}
+
 /*
  * Two lines are reserved whether or not the subtitle needs them, so the big
  * numbers in a row share a baseline. Without the floor, one card whose subtitle
