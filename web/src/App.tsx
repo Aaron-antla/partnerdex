@@ -19,6 +19,7 @@ import { formatDateTime } from './format';
 import { CustomerDetail } from './components/CustomerDetail';
 import { Customers } from './components/Customers';
 import { Login } from './components/Login';
+import { MerchantSearch } from './components/MerchantSearch';
 import { MetricCard } from './components/MetricCard';
 import { Nav } from './components/Nav';
 import { Listings } from './components/Listings';
@@ -442,7 +443,10 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
             <h1>{heading.title}</h1>
             <p className="subtitle">{heading.blurb}</p>
           </div>
-          <ThemeToggle theme={theme} onToggle={toggleTheme} />
+          <div className="masthead-tools">
+            <MerchantSearch appId={query.appId} />
+            <ThemeToggle theme={theme} onToggle={toggleTheme} />
+          </div>
         </header>
 
         {/* Which filters a page shows is declared on the page, because they are

@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
 import { getDb } from '../src/db/index.js';
 import { closeDb } from '../src/db/index.js';
-import { getCustomer, listCustomers } from '../src/customers/index.js';
+import { getCustomer, listCustomers, searchMerchants } from '../src/customers/index.js';
 import { runMetric } from '../src/metrics/registry.js';
+import { createApp } from '../src/server/index.js';
 import { rebuildDerivedTables } from '../src/sync/derive.js';
 import { APP_ID, resetEnvironment, seed } from './helpers.js';
 
@@ -582,5 +584,103 @@ describe('the customer read model', () => {
     // The stamp itself is left alone: the day is all anyone ever knew.
     const review = getCustomer('20')!.events.find((event) => event.type === 'review_posted')!;
     assert.equal(review.occurredAt, '2024-05-10T00:00:00.000Z');
+  });
+});
+
+describe('merchant typeahead', () => {
+  after(() => closeDb());
+
+  before(() => {
+    resetEnvironment();
+    seed(
+      [
+        {
+          chargeRef: 'acme',
+          shopId: '7',
+          amount: 75,
+          activatedAt: '2024-01-10T00:00:00Z',
+          firstSaleAt: '2024-01-10T00:00:00Z',
+        },
+        {
+          chargeRef: 'contains',
+          shopId: '8',
+          amount: 25,
+          activatedAt: '2024-02-01T00:00:00Z',
+          firstSaleAt: '2024-02-01T00:00:00Z',
+          churnedAt: '2024-04-01T00:00:00Z',
+        },
+        {
+          chargeRef: 'zebra',
+          shopId: '9',
+          amount: 200,
+          activatedAt: '2024-01-01T00:00:00Z',
+          firstSaleAt: '2024-01-01T00:00:00Z',
+        },
+        {
+          chargeRef: 'percent',
+          shopId: '10',
+          amount: 10,
+          activatedAt: '2024-03-01T00:00:00Z',
+          firstSaleAt: '2024-03-01T00:00:00Z',
+        },
+      ],
+      { installs: [{ shopId: '7', at: '2024-01-09T00:00:00Z' }] },
+    );
+    const rename = getDb().prepare('UPDATE shops SET name = ? WHERE id = ?');
+    rename.run('Acme Coffee', '7');
+    rename.run('The Acme Store', '8');
+    rename.run('Zebra', '9');
+    rename.run('100% Organic', '10');
+  });
+
+  it('opens on the highest-MRR merchant before anyone else', () => {
+    const found = searchMerchants({ limit: 12 });
+    assert.equal(found.merchants[0]!.shopId, '9');
+    assert.equal(found.merchants[0]!.mrr, 200);
+    assert.ok(found.merchants.some((row) => row.shopId === '7'));
+  });
+
+  it('ranks a prefix match above a contains match, and ignores a richer non-match', () => {
+    const found = searchMerchants({ search: 'acme' });
+    assert.deepEqual(
+      found.merchants.map((row) => row.shopId),
+      ['7', '8'],
+    );
+    assert.equal(found.merchants[0]!.name, 'Acme Coffee');
+  });
+
+  it('finds a merchant by a pasted shop id', () => {
+    const found = searchMerchants({ search: '9' });
+    assert.equal(found.merchants.length, 1);
+    assert.equal(found.merchants[0]!.shopId, '9');
+  });
+
+  it('finds a merchant by their myshopify domain', () => {
+    const found = searchMerchants({ search: 's7.example' });
+    assert.equal(found.merchants.length, 1);
+    assert.equal(found.merchants[0]!.shopId, '7');
+  });
+
+  it('treats % as a character rather than as every merchant', () => {
+    const found = searchMerchants({ search: '%' });
+    assert.equal(found.merchants.length, 1);
+    assert.equal(found.merchants[0]!.shopId, '10');
+    assert.equal(listCustomers({ search: '%' }).total, 1);
+  });
+
+  it('serves typeahead over HTTP rather than reading `search` as a shop id', async () => {
+    const server = createApp().listen(0);
+    await new Promise((resolve) => server.once('listening', resolve));
+    try {
+      const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const response = await fetch(`${origin}/api/customers/search?q=acme`);
+      assert.equal(response.status, 200);
+      const body = (await response.json()) as { merchants: Array<{ shopId: string }> };
+      assert.equal(body.merchants[0]!.shopId, '7');
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
   });
 });

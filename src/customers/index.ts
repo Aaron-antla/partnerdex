@@ -107,13 +107,38 @@ function statusOf(row: SummaryRow, everSubscribed: number): CustomerStatus {
 }
 
 /**
+ * LIKE treats `%` and `_` as wildcards, so a pasted "100%" would otherwise
+ * match every name. `#` is the escape because it never appears as a wildcard.
+ */
+function escapeLike(value: string): string {
+  return value.replace(/[#%_]/g, '#$&');
+}
+
+function likeParams(search: string): { q: string; prefix: string; equals: string; exact: string } {
+  const escaped = escapeLike(search);
+  return {
+    q: `%${escaped}%`,
+    prefix: `${escaped}%`,
+    equals: escaped,
+    exact: search,
+  };
+}
+
+/**
  * Builds the per-shop aggregate. One statement rather than a query per shop,
  * because the list page renders a page of them at a time.
  *
  * `search` matches the merchant's display name or their myshopify domain, which
  * is how a support ticket or a Partner dashboard link identifies them.
+ *
+ * When the caller already knows which shops it wants — a typeahead that picked
+ * twelve ids — the expensive CTEs are restricted to that handful rather than
+ * rebuilt for the whole population and then thrown away by LIMIT.
  */
-function summarySql(appIds: string[], searching: boolean): { sql: string; params: Record<string, unknown> } {
+function summarySql(
+  appIds: string[],
+  filter: { searching?: boolean; shopIds?: string[] } = {},
+): { sql: string; params: Record<string, unknown> } {
   const live = asOfPredicate(liveOptions(appIds), '@now');
   const appList = appIds.map((_, i) => `@sapp${i}`).join(', ');
   const appParams: Record<string, unknown> = {};
@@ -122,13 +147,30 @@ function summarySql(appIds: string[], searching: boolean): { sql: string; params
   });
   const inScope = appIds.length > 0 ? `IN (${appList})` : 'IS NOT NULL';
 
+  const shopIds = filter.shopIds ?? [];
+  shopIds.forEach((id, i) => {
+    appParams[`sid${i}`] = id;
+  });
+
+  const searching = Boolean(filter.searching);
+  const matchedWhere = searching
+    ? `WHERE name LIKE @q ESCAPE '#' OR myshopify_domain LIKE @q ESCAPE '#' OR id = @exact`
+    : shopIds.length > 0
+      ? `WHERE id IN (${shopIds.map((_, i) => `@sid${i}`).join(', ')})`
+      : '';
+  // Restricting the rollups to `matched` is only a win when that set is small.
+  // The unfiltered list page has to rank the population, so it still scans.
+  const onlyMatched = searching || shopIds.length > 0;
+  const inMatched = onlyMatched ? 'AND shop_id IN (SELECT id FROM matched)' : '';
+  const inMatchedS = onlyMatched ? 'AND s.shop_id IN (SELECT id FROM matched)' : '';
+
   return {
     params: { ...live.params, ...appParams },
     sql: `
       WITH matched AS (
         SELECT id, name, myshopify_domain
         FROM shops
-        ${searching ? 'WHERE name LIKE @q OR myshopify_domain LIKE @q OR id = @exact' : ''}
+        ${matchedWhere}
       ),
       live_subs AS (
         SELECT s.shop_id AS shop_id,
@@ -137,6 +179,7 @@ function summarySql(appIds: string[], searching: boolean): { sql: string; params
                MAX(s.currency) AS currency
         FROM subscriptions s
         WHERE ${live.sql}
+          ${inMatchedS}
         GROUP BY s.shop_id
       ),
       trialing AS (
@@ -145,12 +188,14 @@ function summarySql(appIds: string[], searching: boolean): { sql: string; params
         WHERE is_test = 0 AND app_id ${inScope}
           AND trial_status = 'in_trial'
           AND (churn_at IS NULL OR churn_at > @now)
+          ${inMatched}
         GROUP BY shop_id
       ),
       ever_subs AS (
         SELECT shop_id, COUNT(*) AS n
         FROM subscriptions
         WHERE is_test = 0 AND app_id ${inScope} AND conversion_at IS NOT NULL
+          ${inMatched}
         GROUP BY shop_id
       ),
       installs AS (
@@ -159,6 +204,7 @@ function summarySql(appIds: string[], searching: boolean): { sql: string; params
         WHERE app_id ${inScope}
           AND started_at <= @now
           AND (ended_at IS NULL OR ended_at > @now)
+          ${inMatched}
         GROUP BY shop_id
       ),
       paid AS (
@@ -168,12 +214,14 @@ function summarySql(appIds: string[], searching: boolean): { sql: string; params
                MAX(currency) AS currency
         FROM transactions
         WHERE app_id ${inScope}
+          ${inMatched}
         GROUP BY shop_id
       ),
       seen AS (
         SELECT shop_id, MIN(occurred_at) AS first_at, MAX(occurred_at) AS last_at
         FROM customer_events
         WHERE suppressed = 0 AND app_id ${inScope}
+          ${inMatched}
         GROUP BY shop_id
       )
       SELECT m.id AS shopId,
@@ -226,15 +274,13 @@ export function listCustomers(options: {
   const offset = Math.max(options.offset ?? 0, 0);
   const sort = ORDER_BY[options.sort ?? 'mrr'] ? (options.sort ?? 'mrr') : 'mrr';
 
-  const built = summarySql(appIds, search.length > 0);
+  const built = summarySql(appIds, { searching: search.length > 0 });
   const params: Record<string, unknown> = {
     ...built.params,
     now: new Date().toISOString(),
   };
   if (search.length > 0) {
-    params.q = `%${search}%`;
-    // A pasted shop id should find exactly one merchant, not every id containing it.
-    params.exact = search;
+    Object.assign(params, likeParams(search));
   }
 
   const total = (
@@ -246,25 +292,181 @@ export function listCustomers(options: {
     .all({ ...params, limit, offset }) as Array<SummaryRow & { everSubscribed: number }>;
 
   return {
-    customers: rows.map((row) => ({
-      shopId: row.shopId,
-      name: row.name,
-      domain: row.domain,
-      status: statusOf(row, row.everSubscribed),
-      mrr: row.mrr,
-      currency: row.currency,
-      activeSubscriptions: row.activeSubscriptions,
-      activeInstalls: row.activeInstalls,
-      lifetimeGross: row.lifetimeGross,
-      lifetimeNet: row.lifetimeNet,
-      firstSeenAt: row.firstSeenAt,
-      lastEventAt: row.lastEventAt,
-    })),
+    customers: rows.map(toSummary),
     total,
     limit,
     offset,
     query: search,
   };
+}
+
+function toSummary(row: SummaryRow & { everSubscribed: number }): CustomerSummary {
+  return {
+    shopId: row.shopId,
+    name: row.name,
+    domain: row.domain,
+    status: statusOf(row, row.everSubscribed),
+    mrr: row.mrr,
+    currency: row.currency,
+    activeSubscriptions: row.activeSubscriptions,
+    activeInstalls: row.activeInstalls,
+    lifetimeGross: row.lifetimeGross,
+    lifetimeNet: row.lifetimeNet,
+    firstSeenAt: row.firstSeenAt,
+    lastEventAt: row.lastEventAt,
+  };
+}
+
+export interface MerchantSearchResult {
+  merchants: CustomerSummary[];
+  query: string;
+}
+
+/**
+ * Typeahead over merchants.
+ *
+ * Deliberately not the paginated list query: that one counts and ranks the
+ * whole population, which is the right work for a table and the wrong work for
+ * a keystroke. This finds a handful of shop ids first — by name, domain, or a
+ * pasted id — and only then computes status for those rows, so each keystroke
+ * stays in the same single-digit milliseconds as a point lookup.
+ *
+ * An empty query is the top of the book, not an empty box: highest live MRR,
+ * then the most recently seen, so opening the palette already has someone to
+ * pick.
+ *
+ * Hits are ranked before they are hydrated: an exact shop id, then an exact
+ * name or domain, then a prefix, then a contains. MRR only separates ties, so
+ * typing "acme" does not surface a high-paying shop that happens to contain
+ * those letters ahead of Acme Coffee.
+ */
+export function searchMerchants(
+  options: {
+    search?: string;
+    limit?: number;
+    appIds?: string[];
+  } = {},
+): MerchantSearchResult {
+  const db = getDb();
+  const appIds = scope(db, options.appIds ?? []);
+  const search = (options.search ?? '').trim().slice(0, 200);
+  const limit = Math.min(Math.max(options.limit ?? 12, 1), 50);
+
+  const ranked = search.length > 0 ? matchingShopIds(db, search, limit * 4) : topShopIds(db, appIds, limit);
+  if (ranked.length === 0) return { merchants: [], query: search };
+
+  const shopIds = ranked.map((row) => row.shopId);
+  const hitOf = new Map(ranked.map((row) => [row.shopId, row.hit]));
+  const hydrated = summariesFor(appIds, shopIds);
+  const byId = new Map(hydrated.map((row) => [row.shopId, row]));
+
+  const merchants: CustomerSummary[] = [];
+  for (const id of shopIds) {
+    const row = byId.get(id);
+    if (row) merchants.push(row);
+    if (merchants.length >= limit) break;
+  }
+
+  if (search.length > 0) {
+    merchants.sort((a, b) => {
+      const hitDiff = (hitOf.get(a.shopId) ?? 9) - (hitOf.get(b.shopId) ?? 9);
+      if (hitDiff !== 0) return hitDiff;
+      if (b.mrr !== a.mrr) return b.mrr - a.mrr;
+      return (a.name ?? a.domain ?? a.shopId).localeCompare(b.name ?? b.domain ?? b.shopId);
+    });
+  }
+
+  return { merchants, query: search };
+}
+
+interface RankedShop {
+  shopId: string;
+  hit: number;
+}
+
+function matchingShopIds(db: Db, search: string, limit: number): RankedShop[] {
+  return db
+    .prepare(
+      `SELECT id AS shopId,
+              CASE
+                WHEN id = @exact THEN 0
+                WHEN name LIKE @equals ESCAPE '#' OR myshopify_domain LIKE @equals ESCAPE '#' THEN 1
+                WHEN name LIKE @prefix ESCAPE '#' OR myshopify_domain LIKE @prefix ESCAPE '#' THEN 2
+                ELSE 3
+              END AS hit
+       FROM shops
+       WHERE name LIKE @q ESCAPE '#'
+          OR myshopify_domain LIKE @q ESCAPE '#'
+          OR id = @exact
+       ORDER BY hit ASC, name ASC
+       LIMIT @limit`,
+    )
+    .all({ ...likeParams(search), limit }) as RankedShop[];
+}
+
+/**
+ * An untyped palette still has to put *someone* on the first row. Paying
+ * merchants, highest MRR first; if that set is short, the most recently seen
+ * shops fill the rest. Both queries stop at `limit`, so opening the dialog
+ * never ranks the whole file.
+ */
+function topShopIds(db: Db, appIds: string[], limit: number): RankedShop[] {
+  const live = asOfPredicate(liveOptions(appIds), '@now');
+  const appList = appIds.map((_, i) => `@sapp${i}`).join(', ');
+  const appParams: Record<string, unknown> = {};
+  appIds.forEach((id, i) => {
+    appParams[`sapp${i}`] = id;
+  });
+  const inScope = appIds.length > 0 ? `IN (${appList})` : 'IS NOT NULL';
+  const payingParams = { ...live.params, now: new Date().toISOString(), limit };
+  const paying = db
+    .prepare(
+      `SELECT s.shop_id AS shopId
+       FROM subscriptions s
+       WHERE ${live.sql}
+       GROUP BY s.shop_id
+       ORDER BY SUM(s.monthly_amount) DESC
+       LIMIT @limit`,
+    )
+    .all(payingParams) as Array<{ shopId: string }>;
+
+  const ids: RankedShop[] = [];
+  const seen = new Set<string>();
+  for (const row of paying) {
+    if (seen.has(row.shopId)) continue;
+    seen.add(row.shopId);
+    ids.push({ shopId: row.shopId, hit: 0 });
+  }
+  if (ids.length >= limit) return ids;
+
+  const recent = db
+    .prepare(
+      `SELECT shop_id AS shopId
+       FROM customer_events
+       WHERE suppressed = 0 AND app_id ${inScope}
+       GROUP BY shop_id
+       ORDER BY MAX(occurred_at) DESC
+       LIMIT @limit`,
+    )
+    .all({ ...appParams, limit }) as Array<{ shopId: string }>;
+
+  for (const row of recent) {
+    if (seen.has(row.shopId)) continue;
+    seen.add(row.shopId);
+    ids.push({ shopId: row.shopId, hit: 1 });
+    if (ids.length >= limit) break;
+  }
+  return ids;
+}
+
+function summariesFor(appIds: string[], shopIds: string[]): CustomerSummary[] {
+  if (shopIds.length === 0) return [];
+  const db = getDb();
+  const built = summarySql(appIds, { shopIds });
+  const rows = db
+    .prepare(built.sql)
+    .all({ ...built.params, now: new Date().toISOString() }) as Array<SummaryRow & { everSubscribed: number }>;
+  return rows.map(toSummary);
 }
 
 export interface CustomerSubscription {

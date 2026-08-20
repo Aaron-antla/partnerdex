@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getConfig } from '../config.js';
-import { getCustomer, listCustomers, type CustomerSort } from '../customers/index.js';
+import { getCustomer, listCustomers, searchMerchants, type CustomerSort } from '../customers/index.js';
 import { getDb } from '../db/index.js';
 import { type RawMetricQuery } from '../metrics/context.js';
 import { listMetrics, runMetric } from '../metrics/registry.js';
@@ -258,6 +258,30 @@ export function createApp(): express.Express {
           sort: (pick('sort') ?? 'mrr') as CustomerSort,
           limit: Number.isFinite(limit) ? limit : undefined,
           offset: Number.isFinite(offset) ? offset : undefined,
+          appIds: appIds ? appIds.split(',').filter(Boolean) : [],
+        }),
+      );
+    } catch (error) {
+      sendError(response, error);
+    }
+  });
+
+  /**
+   * Typeahead for the command palette. Mounted before `/:shopId` so `search`
+   * is not read as a shop id. No total: the palette never paginates.
+   */
+  app.get('/api/customers/search', (request, response) => {
+    try {
+      const pick = (name: string): string | undefined => {
+        const value = request.query[name];
+        return typeof value === 'string' ? value : undefined;
+      };
+      const appIds = pick('appIds');
+      const limit = Number(pick('limit'));
+      response.json(
+        searchMerchants({
+          search: pick('q') ?? '',
+          limit: Number.isFinite(limit) ? limit : undefined,
           appIds: appIds ? appIds.split(',').filter(Boolean) : [],
         }),
       );

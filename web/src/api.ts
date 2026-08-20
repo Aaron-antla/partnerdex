@@ -290,6 +290,33 @@ export const fetchCustomers = (options: {
   return getJson<CustomerListResult>(`/api/customers?${params.toString()}`);
 };
 
+export interface MerchantSearchResult {
+  merchants: CustomerSummary[];
+  query: string;
+}
+
+/**
+ * The command palette. A short, ranked list — not a page of the table —
+ * so a keystroke does not wait on a COUNT of the population.
+ */
+export const searchMerchants = (
+  options: {
+    search?: string;
+    limit?: number;
+    appId?: string;
+    signal?: AbortSignal;
+  } = {},
+): Promise<MerchantSearchResult> => {
+  const params = new URLSearchParams();
+  if (options.search) params.set('q', options.search);
+  if (options.limit) params.set('limit', String(options.limit));
+  if (options.appId) params.set('appIds', options.appId);
+  const query = params.toString();
+  return request<MerchantSearchResult>(`/api/customers/search${query ? `?${query}` : ''}`, {
+    signal: options.signal,
+  });
+};
+
 export const fetchCustomer = (shopId: string, appId = ''): Promise<CustomerDetail> => {
   const params = new URLSearchParams();
   if (appId) params.set('appIds', appId);
