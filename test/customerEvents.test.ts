@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
 import { getDb } from '../src/db/index.js';
 import { closeDb } from '../src/db/index.js';
 import { getCustomer, listCustomers, searchMerchants } from '../src/customers/index.js';
 import { runMetric } from '../src/metrics/registry.js';
+import { createApp } from '../src/server/index.js';
 import { rebuildDerivedTables } from '../src/sync/derive.js';
 import { APP_ID, resetEnvironment, seed } from './helpers.js';
 
@@ -664,5 +666,21 @@ describe('merchant typeahead', () => {
     assert.equal(found.merchants.length, 1);
     assert.equal(found.merchants[0]!.shopId, '10');
     assert.equal(listCustomers({ search: '%' }).total, 1);
+  });
+
+  it('serves typeahead over HTTP rather than reading `search` as a shop id', async () => {
+    const server = createApp().listen(0);
+    await new Promise((resolve) => server.once('listening', resolve));
+    try {
+      const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const response = await fetch(`${origin}/api/customers/search?q=acme`);
+      assert.equal(response.status, 200);
+      const body = (await response.json()) as { merchants: Array<{ shopId: string }> };
+      assert.equal(body.merchants[0]!.shopId, '7');
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
   });
 });
