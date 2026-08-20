@@ -37,6 +37,11 @@ CREATE TABLE IF NOT EXISTS shops (
   myshopify_domain  TEXT
 );
 
+-- Prefix lookups for the merchant palette. A contains-search still scans, but
+-- the shops table is one row per merchant and that scan is the cheap part.
+CREATE INDEX IF NOT EXISTS idx_shops_name ON shops (name);
+CREATE INDEX IF NOT EXISTS idx_shops_domain ON shops (myshopify_domain);
+
 -- Raw app lifecycle events. The Partner API does not expose an event id, so the
 -- natural key below is what makes re-syncing idempotent. Empty strings rather
 -- than NULLs because SQLite treats NULLs as distinct inside a UNIQUE index.
