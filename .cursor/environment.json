@@ -1,0 +1,8 @@
+{
+  "name": "partnerdex",
+  "install": "npm ci\nnpm run build",
+  "ports": [
+    { "name": "api", "port": 8787 },
+    { "name": "vite", "port": 5173 }
+  ]
+}
