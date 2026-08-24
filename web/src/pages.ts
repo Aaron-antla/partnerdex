@@ -135,6 +135,12 @@ const REVENUE: PageSpec = {
       plot: 'bar',
     },
     {
+      metric: 'one_time_charges',
+      label: 'One-time charges',
+      subtitle: 'App purchases billed in the period, not recurring.',
+      plot: 'bar',
+    },
+    {
       metric: 'mrr_growth',
       label: 'MRR growth',
       subtitle: 'Change against the bucket before.',

@@ -197,6 +197,41 @@ export function seed(
   return db;
 }
 
+export interface OneTimeChargeFixture {
+  id: string;
+  shopId: string;
+  amount: number;
+  at: string;
+  appId?: string;
+}
+
+/**
+ * Seeds AppOneTimeSale rows through the real ingest path. One-time purchases
+ * never become subscriptions, so this is only cash, not a live contract.
+ */
+export function seedOneTimeCharges(fixtures: OneTimeChargeFixture[]) {
+  const db = getDb();
+  insertTransactions(
+    db,
+    fixtures.map((fixture) => {
+      const appId = fixture.appId ?? APP_ID;
+      return {
+        id: `gid://partners/AppOneTimeSale/${fixture.id}`,
+        createdAt: fixture.at,
+        __typename: 'AppOneTimeSale',
+        app: { id: `gid://partners/App/${appId}`, name: `App ${appId}` },
+        shop: shop(fixture.shopId),
+        chargeId: `gid://shopify/AppPurchaseOneTime/${fixture.id}`,
+        grossAmount: { amount: String(fixture.amount), currencyCode: 'USD' },
+        netAmount: { amount: String(fixture.amount * 0.85), currencyCode: 'USD' },
+        shopifyFee: { amount: String(fixture.amount * 0.15), currencyCode: 'USD' },
+      };
+    }),
+  );
+  rebuildDerivedTables(db);
+  return db;
+}
+
 export function pointAt(response: { timeSeries: Array<{ value: number; periodStart: string }> }, date: string): number {
   const point = response.timeSeries.find((entry) => entry.periodStart.startsWith(date));
   if (!point) throw new Error(`No bucket starting ${date}. Got: ${response.timeSeries.map((p) => p.periodStart).join(', ')}`);

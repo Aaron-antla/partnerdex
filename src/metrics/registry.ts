@@ -8,6 +8,7 @@ import {
   mrrByAppReport,
   mrrGrowthReport,
   mrrReport,
+  oneTimeChargesReport,
 } from './reports/revenue.js';
 import {
   activeInstallsReport,
@@ -59,6 +60,12 @@ export const METRICS: MetricDefinition[] = [
     label: 'Gross earnings',
     description: 'What merchants paid in each bucket, before Shopify’s revenue share.',
     run: grossEarningsReport,
+  },
+  {
+    key: 'one_time_charges',
+    label: 'One-time charges',
+    description: 'AppOneTimeSale cash billed in each bucket. Not recurring, not MRR.',
+    run: oneTimeChargesReport,
   },
   {
     key: 'mrr_growth',

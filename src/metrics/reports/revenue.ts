@@ -317,3 +317,60 @@ export function grossEarningsReport(context: MetricContext): MetricResponse {
     },
   });
 }
+
+interface OneTimeRow {
+  idx: number;
+  gross: number;
+  net: number;
+}
+
+/**
+ * One-time charges are a flow of AppOneTimeSale cash, not a run-rate. They
+ * never enter MRR — there is no live contract to reconstruct — but they are
+ * billed money, and the dashboard needs a place to add them up that is not
+ * Gross earnings' mixed total.
+ */
+export function oneTimeChargesReport(context: MetricContext): MetricResponse {
+  const buckets = context.window.buckets;
+  const cte = bucketsCte(buckets);
+
+  const params: Record<string, unknown> = { ...cte.params };
+  const appNames = context.appIds.map((id, index) => {
+    params[`eapp${index}`] = id;
+    return `@eapp${index}`;
+  });
+  const appFilter = appNames.length > 0 ? `AND t.app_id IN (${appNames.join(', ')})` : '';
+
+  const rows = context.db
+    .prepare(
+      `WITH ${cte.sql}
+       SELECT b.idx AS idx,
+              COALESCE(SUM(t.gross_amount), 0) AS gross,
+              COALESCE(SUM(t.net_amount), 0) AS net
+       FROM buckets b
+       LEFT JOIN transactions t
+         ON t.created_at >= b.bucket_from
+        AND t.created_at < b.as_of
+        AND t.type = 'AppOneTimeSale'
+        ${appFilter}
+       GROUP BY b.idx
+       ORDER BY b.idx`,
+    )
+    .all(params) as OneTimeRow[];
+
+  const byIndex = new Map(rows.map((row) => [row.idx, row]));
+  const values = buckets.map((_, idx) => byIndex.get(idx)?.gross ?? 0);
+  const netTotal = buckets.reduce((total, _, idx) => total + (byIndex.get(idx)?.net ?? 0), 0);
+
+  return buildResponse({
+    metric: 'one_time_charges',
+    kind: 'flow',
+    format: 'money',
+    window: context.window,
+    values,
+    currency: context.currency,
+    meta: {
+      netEarnings: Math.round(netTotal * 100) / 100,
+    },
+  });
+}

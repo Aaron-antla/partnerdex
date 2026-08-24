@@ -112,6 +112,7 @@ If `DASHBOARD_PASSWORD` is configured (minimum 8 characters), the application se
 | **MRR** | Normalized monthly amounts of live paid subscriptions. Annual plans contribute 1/12 of their price; 30-day plans contribute their full price. Active trials contribute zero until the first paid charge settles. Frozen subscriptions contribute zero. |
 | **ARR** | MRR × 12. Represents an instantaneous run rate. |
 | **Gross earnings** | Actual cash collected inside the period, less refunds and credits. Includes subscription, one-time, and usage charges. Before Shopify's revenue share. |
+| **One-time charges** | `AppOneTimeSale` cash billed inside the period. Not recurring and not part of MRR. Before Shopify's revenue share. |
 | **ARPU** | MRR divided by active paying population. `METRICS_BY_SHOP` determines whether population is counted by subscribers or individual subscriptions. |
 | **LTV** | ARPU divided by the monthly subscription churn rate. Represents an instantaneous, forward-looking cohort value. |
 | **MRR growth** | Percentage change in MRR compared to the start of the period. |
