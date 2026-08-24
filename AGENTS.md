@@ -1,0 +1,21 @@
+# AGENTS.md
+
+## Cursor Cloud specific instructions
+
+PartnerDex is a single Node.js/TypeScript app (npm, Node >= 20): an Express API + Vite/React dashboard that reconstructs Shopify app SaaS metrics (MRR, ARR, churn, trials, …) from data stored in a local SQLite file (`better-sqlite3`, embedded — no DB server). Standard commands live in `package.json` scripts and `README.md`; the notes below only cover non-obvious things.
+
+### Running / caveats
+- `serve`, `sync`, `doctor`, and `query` throw a `ConfigError` at startup unless `PARTNER_API_TOKEN` and `PARTNER_ORGANIZATION_ID` are set (see `src/config.ts`). For local dev without live Shopify access, put dummy values in `.env` (gitignored) and set `SYNC_INTERVAL_MINUTES=0` so the background loop never tries to reach the real Partner API. The test suite is unaffected — it sets its own env in `test/helpers.ts`.
+- `npm run dev` runs two processes via `concurrently`: the API (`tsx watch src/cli.ts serve`) on port `8787`, and the Vite dev server on port `5173` which proxies `/api` → `localhost:8787` (`vite.config.ts`). Open the dashboard at `http://localhost:5173`. In production the web bundle is built and served directly by the API on `8787`.
+- Leaving `DASHBOARD_PASSWORD` empty disables the login gate (localhost default); set it (min 8 chars) to require auth.
+- SQLite lives at `DATABASE_PATH` (default `./data/partnerdex.db`, auto-created). `data/`, `*.db`, and `.env` are gitignored.
+
+### Seeding data offline (for a working dashboard without the Partner API)
+A freshly-booted instance has an empty DB, so all metrics read zero. To populate realistic data without the live Partner API, insert `AppEventNode`s / `TransactionNode`s through the app's real ingest+derive path and the metrics compute normally:
+`insertAppEvents(db, appId, events)` + `insertTransactions(db, txns)` + `rebuildDerivedTables(db)` (all in `src/sync/ingest.ts` / `src/sync/derive.ts`). `test/helpers.ts` `seed(...)` shows the exact node shapes (subscription activate/cancel, relationship install/uninstall, subscription sales). Anchor fixture dates relative to "now" or the default "last 12 months" window shows nothing.
+
+### Lint / test / build
+- Lint / static check: `npm run typecheck` (there is no ESLint config; this is the only static check).
+- Tests: `npm test` (Node's built-in runner over `test/*.test.ts`, in-memory SQLite, no external services).
+- Build: `npm run build` (`tsc` server → `dist/`, `vite build` web → `dist/web`); run with `npm start`.
+- `better-sqlite3` is a native module (prebuilt binary on install). If the Node version changes, reinstall deps so its binary matches.
