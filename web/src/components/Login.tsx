@@ -37,7 +37,7 @@ export function Login({ onAuthenticated }: { onAuthenticated: () => void }) {
       <form className="login-card" onSubmit={submit}>
         <div className="login-identity">
           <Logo />
-          <h1 className="login-brand">PartnerDex</h1>
+          <h1 className="login-brand">Antla Analytics</h1>
         </div>
         <p className="login-blurb">Enter the dashboard password to continue.</p>
 
