@@ -71,6 +71,27 @@ export interface PageDefaults {
 
 export type PageFilter = 'app' | 'range' | 'trials' | 'rating' | 'granularity';
 
+/**
+ * Metrics whose headline is a living population, so the card title can open
+ * that list instead of squeezing a table into the chart.
+ */
+export type CustomerMetricFilter = 'discounted' | 'paying' | 'trialing';
+
+export function customerFilterFor(metric: string): CustomerMetricFilter | undefined {
+  switch (metric) {
+    case 'discounted_mrr':
+      return 'discounted';
+    case 'subscribers':
+    case 'mrr':
+    case 'mrr_by_app':
+      return 'paying';
+    case 'on_trial':
+      return 'trialing';
+    default:
+      return undefined;
+  }
+}
+
 /** What a metric page shows when it has not asked for anything different. */
 export const DEFAULT_FILTERS: PageFilter[] = ['app', 'range', 'trials'];
 
@@ -83,13 +104,20 @@ const OVERVIEW: PageSpec = {
   id: 'overview',
   label: 'Overview',
   title: 'Overview',
-  blurb: 'The five figures that say whether the business is working.',
+  blurb: 'The figures that say whether the business is working.',
   cards: [
     {
       metric: 'mrr',
       label: 'MRR',
       subtitle: 'Recurring revenue live at each point.',
       plot: 'line',
+    },
+    {
+      metric: 'discounted_mrr',
+      label: 'Discounted MRR',
+      subtitle: 'Unique, custom, and catalog charges billed below list.',
+      plot: 'area',
+      breakdown: true,
     },
     {
       metric: 'gross_earnings',
@@ -127,6 +155,13 @@ const REVENUE: PageSpec = {
   blurb: 'What is being earned, how fast it is growing, and what each customer is worth.',
   cards: [
     { metric: 'mrr', label: 'MRR', subtitle: 'Recurring revenue live at each point.', plot: 'line' },
+    {
+      metric: 'discounted_mrr',
+      label: 'Discounted MRR',
+      subtitle: 'Unique, custom, and catalog charges billed below list.',
+      plot: 'area',
+      breakdown: true,
+    },
     { metric: 'arr', label: 'ARR', subtitle: 'Run-rate: MRR × 12.', plot: 'line' },
     {
       metric: 'gross_earnings',
@@ -326,9 +361,9 @@ const LISTINGS: PageSpec = {
 
 const NOTIFICATIONS: PageSpec = {
   id: 'notifications',
-  label: 'Notifications',
-  title: 'Notifications',
-  blurb: 'Send customer events to Slack as they happen, instead of noticing them a week later.',
+  label: 'Slack',
+  title: 'Slack',
+  blurb: 'Send a Slack message when a merchant installs, changes plan, or leaves.',
   kind: 'notifications',
   cards: [],
 };

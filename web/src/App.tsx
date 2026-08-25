@@ -21,22 +21,18 @@ import { Customers } from './components/Customers';
 import { Login } from './components/Login';
 import { MerchantSearch } from './components/MerchantSearch';
 import { MetricCard } from './components/MetricCard';
-import { Nav } from './components/Nav';
+import { AppSidebar, NavToggle } from './components/AppSidebar';
 import { Listings } from './components/Listings';
 import { BigQuery } from './components/BigQuery';
 import { Funnel } from './components/Funnel';
 import { Notifications } from './components/Notifications';
 import { UnmatchedReviews } from './components/Reviews';
-import { DEFAULT_FILTERS, metricsFor, pageById } from './pages';
-
-const PERIODS = [
-  { value: 'last_7_days', label: 'Last 7 days' },
-  { value: 'last_30_days', label: 'Last 30 days' },
-  { value: 'last_90_days', label: 'Last 90 days' },
-  { value: 'last_12_months', label: 'Last 12 months' },
-  { value: 'year_to_date', label: 'Year to date' },
-  { value: 'all_time', label: 'All time' },
-];
+import { DEFAULT_FILTERS, customerFilterFor, metricsFor, pageById, type PageFilter } from './pages';
+import { RangeControl } from './components/RangeControl';
+import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Label } from '@/components/ui/label';
 
 /**
  * Funnel column widths.
@@ -75,6 +71,7 @@ function useTheme(): ['dark' | 'light', () => void] {
     setTheme((current) => {
       const next = current === 'dark' ? 'light' : 'dark';
       document.documentElement.dataset.theme = next;
+      document.documentElement.classList.toggle('dark', next === 'dark');
       window.localStorage.setItem(THEME_KEY, next);
       return next;
     });
@@ -231,6 +228,8 @@ export default function App() {
 function Dashboard({ onLogout }: { onLogout?: () => void }) {
   const [query, setQuery] = useState<QueryState>({
     period: 'last_12_months',
+    start: '',
+    end: '',
     appId: '',
     includeUsage: true,
     includeTrials: false,
@@ -240,6 +239,12 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
 
   const route = useRoute();
   const page = useMemo(() => pageById(route.pageId), [route.pageId]);
+  const metricCard = useMemo(
+    () => (route.param ? page.cards.find((card) => card.metric === route.param) : undefined),
+    [page, route.param],
+  );
+  const customerFilter = metricCard ? customerFilterFor(metricCard.metric) : undefined;
+  const isMetricCustomers = Boolean(customerFilter);
 
   /*
    * A page's declared filter defaults, applied on the way in.
@@ -271,18 +276,14 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
   //
   // The funnel is the odd one: it takes the same filters but fetches its own
   // shape, so it shows the controls without joining the overview request.
-  const isMetrics = !isCustomers && !isNotifications && !isListings && !isBigQuery;
-  const filters = page.filters ?? DEFAULT_FILTERS;
+  // A metric's customer list is live-as-of-now, so the range does not apply;
+  // the app picker still does.
+  const isMetrics = !isCustomers && !isNotifications && !isListings && !isBigQuery && !isMetricCustomers;
+  const filters: PageFilter[] = isMetricCustomers ? ['app'] : (page.filters ?? DEFAULT_FILTERS);
 
   const [collapsed, setCollapsed] = useState(
     () => window.localStorage.getItem(COLLAPSE_KEY) === '1',
   );
-  const toggleNav = useCallback(() => {
-    setCollapsed((current) => {
-      window.localStorage.setItem(COLLAPSE_KEY, current ? '0' : '1');
-      return !current;
-    });
-  }, []);
 
   const [overview, setOverview] = useState<Overview | null>(null);
   const [apps, setApps] = useState<AppSummary[]>([]);
@@ -378,7 +379,10 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
     }
   }, [status]);
 
-  const wanted = useMemo(() => metricsFor(page), [page]);
+  const wanted = useMemo(
+    () => (isMetricCustomers ? [] : metricsFor(page)),
+    [page, isMetricCustomers],
+  );
 
   /**
    * Changing page changes which metrics exist in the response, so the old
@@ -425,8 +429,15 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
     setQuery((current) => ({ ...current, ...changes }));
   }, []);
 
-  // The overview greets; every other page names itself.
-  const heading = page.id === 'overview' ? greeting() : { title: page.title, blurb: page.blurb };
+  const heading =
+    isMetricCustomers && metricCard
+      ? {
+          title: metricCard.label,
+          blurb: metricCard.subtitle ?? 'Merchants currently in this figure.',
+        }
+      : page.id === 'overview'
+        ? greeting()
+        : { title: page.title, blurb: page.blurb };
 
   const anyMetric = overview ? Object.values(overview)[0] : undefined;
   const interval = anyMetric?.timeSeriesInterval === 'day' ? 'Daily' : 'Monthly';
@@ -434,14 +445,23 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
   const fixedRange = isFunnel && query.granularity === 'previous_7_days';
 
   return (
-    <div className={collapsed ? 'shell collapsed' : 'shell'}>
-      <Nav current={page.id} collapsed={collapsed} onToggle={toggleNav} onLogout={onLogout} />
-
+    <TooltipProvider>
+    <SidebarProvider className="min-h-svh">
+      <AppSidebar current={page.id} onLogout={onLogout} />
+      <SidebarInset>
       <main className="main">
         <header className="masthead">
-          <div>
-            <h1>{heading.title}</h1>
-            <p className="subtitle">{heading.blurb}</p>
+          <div className="masthead-lead">
+            <NavToggle />
+            <div>
+              {isMetricCustomers ? (
+                <a className="back-link" href={`#/${page.id}`}>
+                  ← {page.title}
+                </a>
+              ) : null}
+              <h1>{heading.title}</h1>
+              <p className="subtitle">{heading.blurb}</p>
+            </div>
           </div>
           <div className="masthead-tools">
             <MerchantSearch appId={query.appId} />
@@ -452,109 +472,100 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
         {/* Which filters a page shows is declared on the page, because they are
             not universally meaningful: trials say nothing about a listing, and
             a star rating says nothing about revenue. */}
-        {!isMetrics ? null : (
+        {!isMetrics && !isMetricCustomers ? null : (
           <div className="controls">
             {filters.includes('app') ? (
               <div className="control">
-                <label htmlFor="app">App</label>
-                {/* The funnel offers one app at a time, from the apps that have
-                    a GA4 dataset. "All apps" is absent rather than disabled:
-                    across apps, one app's visitors sit above several apps'
-                    installs and the conversion exceeds 100%. */}
-                <select
-                  id="app"
-                  value={query.appId}
+                <Label>App</Label>
+                <Select
+                  value={query.appId || (isFunnel ? '' : 'all')}
                   disabled={isFunnel && (funnelApps?.length ?? 0) === 0}
-                  onChange={(event) => patch({ appId: event.target.value })}
+                  onValueChange={(next) => patch({ appId: next === 'all' ? '' : next })}
                 >
-                  {isFunnel ? (
-                    funnelApps === null ? (
-                      <option value="">Loading…</option>
-                    ) : funnelApps.length === 0 ? (
-                      <option value="">No app has a dataset yet</option>
-                    ) : null
-                  ) : (
-                    <option value="">All apps in scope</option>
-                  )}
-                  {(isFunnel ? funnelApps ?? [] : apps).map((app) => (
-                    <option key={app.id} value={app.id}>
-                      {app.name}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue placeholder={isFunnel ? 'No app has a dataset yet' : 'All apps in scope'} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {isFunnel ? null : <SelectItem value="all">All apps in scope</SelectItem>}
+                    {(isFunnel ? funnelApps ?? [] : apps).map((app) => (
+                      <SelectItem key={app.id} value={app.id}>
+                        {app.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             ) : null}
 
             {filters.includes('granularity') ? (
               <div className="control">
-                <label htmlFor="granularity">Granularity</label>
-                <select
-                  id="granularity"
+                <Label>Granularity</Label>
+                <Select
                   value={query.granularity}
-                  onChange={(event) =>
-                    patch({ granularity: event.target.value as Granularity })
-                  }
+                  onValueChange={(next) => patch({ granularity: next as Granularity })}
                 >
-                  {GRANULARITIES.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {GRANULARITIES.map((item) => (
+                      <SelectItem key={item.value} value={item.value}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             ) : null}
 
             {filters.includes('range') ? (
-              <div className="control">
-                <label htmlFor="period">Range</label>
-                <select
-                  id="period"
-                  value={query.period}
-                  /* A grouped week carries its own span, so the range has
-                     nothing left to choose and says so instead of sitting
-                     there looking live. */
-                  disabled={fixedRange}
-                  title={fixedRange ? 'The grouped view covers the last seven days.' : undefined}
-                  onChange={(event) => patch({ period: event.target.value })}
-                >
-                  {PERIODS.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <RangeControl
+                value={{ period: query.period, start: query.start, end: query.end }}
+                disabled={fixedRange}
+                disabledTitle={
+                  fixedRange ? 'The grouped view covers the last seven days.' : undefined
+                }
+                onChange={(next) => patch(next)}
+              />
             ) : null}
 
             {filters.includes('trials') ? (
               <div className="control">
-                <label htmlFor="trials">Trials in MRR</label>
-                <select
-                  id="trials"
+                <Label>Trials in MRR</Label>
+                <Select
                   value={String(query.includeTrials)}
-                  onChange={(event) => patch({ includeTrials: event.target.value === 'true' })}
+                  onValueChange={(next) => patch({ includeTrials: next === 'true' })}
                 >
-                  <option value="false">Excluded</option>
-                  <option value="true">Included</option>
-                </select>
+                  <SelectTrigger className="w-[160px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="false">Excluded</SelectItem>
+                    <SelectItem value="true">Included</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             ) : null}
 
             {filters.includes('rating') ? (
               <div className="control">
-                <label htmlFor="rating">Rating</label>
-                <select
-                  id="rating"
+                <Label>Rating</Label>
+                <Select
                   value={String(query.rating)}
-                  onChange={(event) => patch({ rating: Number(event.target.value) })}
+                  onValueChange={(next) => patch({ rating: Number(next) })}
                 >
-                  <option value="0">Any rating</option>
-                  {[5, 4, 3, 2, 1].map((value) => (
-                    <option key={value} value={value}>
-                      {value} star{value === 1 ? '' : 's'}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="w-[160px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="0">Any rating</SelectItem>
+                    {[5, 4, 3, 2, 1].map((star) => (
+                      <SelectItem key={star} value={String(star)}>
+                        {star} star{star === 1 ? '' : 's'}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             ) : null}
 
@@ -586,6 +597,7 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
         !isReviews &&
         !isBigQuery &&
         !isFunnel &&
+        !isMetricCustomers &&
         status &&
         !hasData ? (
           <div className="notice">
@@ -616,6 +628,10 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
           )
         ) : null}
 
+        {isMetricCustomers && customerFilter ? (
+          <Customers appId={query.appId} filter={customerFilter} />
+        ) : null}
+
         {isNotifications ? <Notifications /> : null}
 
         {isListings ? <Listings /> : null}
@@ -642,6 +658,8 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
             <Funnel
               appId={query.appId}
               period={query.period}
+              start={query.start}
+              end={query.end}
               granularity={query.granularity}
               key={dataVersion}
             />
@@ -665,6 +683,9 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
                 key={`${page.id}:${card.metric}`}
                 spec={card}
                 metric={overview[card.metric]}
+                href={
+                  customerFilterFor(card.metric) ? `#/${page.id}/${card.metric}` : undefined
+                }
               />
             ))}
           </div>
@@ -686,6 +707,8 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
           </p>
         ) : null}
       </main>
-    </div>
+      </SidebarInset>
+    </SidebarProvider>
+    </TooltipProvider>
   );
 }

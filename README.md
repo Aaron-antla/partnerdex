@@ -85,6 +85,12 @@ For production (Express API + SQLite), refer to the detailed guide in [DEPLOY.md
 
 GitHub is also connected to Cloudflare Workers Builds. That host can only serve the Vite dashboard as static assets — the API and SQLite store stay on the Node process. `wrangler.jsonc` is required so deploys skip interactive autoconfig; it points assets at `dist/web`. `/api` on that Worker returns JSON 503 so the SPA does not parse itself as an API response.
 
+### Host the dashboard on Workers Builds
+
+In the Cloudflare dashboard, set **Build command** to `npm run build:web`. Set **Deploy command** to `npx wrangler deploy`. If **Build command** already ran, do not set **Deploy command** to `npm run deploy`. That rebuilds twice.
+
+`wrangler.jsonc` is the source of truth for the asset directory (`dist/web`). A dashboard output directory of `dist` is wrong.
+
 ---
 
 ## 4. Details and customizations
@@ -228,10 +234,12 @@ Traffic is then pulled on the normal sync loop into `listing_events`, incrementa
 The service-account key is stored in the local database and is never sent back to the browser — the dashboard identifies it by the account email and the tail of the key id. Disconnecting deletes the key and keeps the traffic already collected.
 
 ### Slack Notifications
-Configure an incoming Slack webhook under the **Notifications** tab to receive alerts for subscription and review changes.
-- **Subscription events:** Subscriptions started, restarted, upgraded, downgraded, frozen, and cancelled.
-- **Review events:** New reviews, updated ratings, and removals.
-- **Deduplication:** Alerts are tracked in `notification_deliveries` to ensure no notification is sent twice, even after full database rebuilds.
+Configure an incoming Slack webhook under **Settings → Slack**. Pick the channel in Slack when you create the webhook, then paste the URL here.
+- **Installs, upgrades, downgrades, uninstalls:** Independent toggles. An install message includes the plan when they signed up in the same moment.
+- **Other subscription events:** Trials, freezes, a first paid start, and a subscription cancelled while the app is still installed.
+- **Reviews:** New reviews, updated ratings, and removals.
+- **Store URL:** Messages link to `https://{myshopify-domain}`. Merchant email is not in the Partner API.
+- **Deduplication:** Alerts are tracked in `notification_deliveries` so a rebuild does not send the same event twice.
 
 ### Querying from the Command Line
 Use the built-in CLI to pull raw metrics:

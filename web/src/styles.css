@@ -1,3 +1,39 @@
+@import 'tailwindcss';
+
+/* Safety: a failed sidebar width utility used to make the rail `fixed` and
+   cover the whole page, which swallowed clicks on Range and hid the new UI. */
+[data-slot='sidebar-wrapper'] {
+  display: flex;
+  min-height: 100vh;
+  width: 100%;
+  align-items: stretch;
+}
+[data-slot='sidebar-inset'] {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* Keep the rail a column, never a full-page overlay. Width lives here so a
+   missing Tailwind width utility cannot stretch `fixed inset-y-0` across the
+   metrics. Offcanvas still slides it away via `left`. */
+[data-slot='sidebar-container'] {
+  height: 100svh;
+  width: 16rem;
+  max-width: 16rem;
+}
+[data-slot='sidebar-inner'] {
+  height: 100%;
+  min-height: 100%;
+  background: var(--surface-2);
+}
+[data-slot='sidebar-menu-button'][data-active='true'] {
+  background: transparent;
+  box-shadow: inset 2px 0 0 var(--brand);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 /*
  * Lumina Modern — the design system this dashboard is drawn in.
  *
@@ -10,6 +46,10 @@
  * contrast floor on a given surface, the token shifts and the deviation is noted
  * on the line; the brand hue is never changed, only its lightness.
  */
+/*
+ ---break---
+ */
+@custom-variant dark (&:is(.dark *));
 :root {
   color-scheme: light;
 
@@ -69,6 +109,16 @@
 
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
   --shadow-md: 0 1px 3px rgba(15, 23, 42, 0.08), 0 4px 12px rgba(15, 23, 42, 0.05);
+
+  /* Rail tokens follow Lumina, not the default shadcn gray sidebar. */
+  --sidebar: var(--surface-2);
+  --sidebar-foreground: var(--text-primary);
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: var(--brand-on);
+  --sidebar-accent: var(--hover-wash);
+  --sidebar-accent-foreground: var(--text-primary);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--brand);
 }
 
 /*
@@ -117,6 +167,15 @@
   /* Elevation is carried by surface value in dark mode, not by shadow. */
   --shadow-sm: none;
   --shadow-md: none;
+
+  --sidebar: var(--surface-2);
+  --sidebar-foreground: var(--text-primary);
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: var(--brand-on);
+  --sidebar-accent: var(--hover-wash);
+  --sidebar-accent-foreground: var(--text-primary);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--brand);
 }
 
 * {
@@ -251,6 +310,17 @@ h3,
   stroke-linejoin: round;
 }
 
+.masthead-lead {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.nav-toggle-reopen {
+  margin-top: 2px;
+}
+
 .nav-group+.nav-group {
   margin-top: 16px;
 }
@@ -346,7 +416,7 @@ h3,
 
 .main {
   min-width: 0;
-  max-width: 1240px;
+  width: 100%;
   padding: 24px 20px 64px;
 }
 
@@ -365,7 +435,7 @@ h3,
     border-bottom: 1px solid var(--border);
   }
 
-  .nav-toggle {
+  .nav .nav-toggle {
     display: none;
   }
 
@@ -559,7 +629,35 @@ h3,
 }
 
 .control input[type='date'] {
-  min-width: 160px;
+  min-width: 0;
+  color-scheme: inherit;
+}
+
+.control input[type='date']::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.control-range {
+  min-width: 220px;
+}
+
+.range-dates {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.range-dates input[type='date'] {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 6px 8px;
+}
+
+.range-dates-sep {
+  color: var(--muted);
+  flex: 0 0 auto;
+  line-height: 1;
 }
 
 .control-note {
@@ -657,6 +755,15 @@ h3,
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
+}
+
+.card-label a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.card-label a:hover {
+  text-decoration: underline;
 }
 
 /*
@@ -2938,4 +3045,30 @@ button.primary:disabled,
 /* A second heading inside the panel needs air above it; the first does not. */
 .funnel-settings-title.spaced {
   margin-top: 14px;
+}
+/*
+ ---break---
+ */
+.dark {
+  --sidebar: var(--surface-2);
+  --sidebar-foreground: var(--text-primary);
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: var(--brand-on);
+  --sidebar-accent: var(--hover-wash);
+  --sidebar-accent-foreground: var(--text-primary);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--brand);
+}
+/*
+ ---break---
+ */
+@theme inline {
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
 }

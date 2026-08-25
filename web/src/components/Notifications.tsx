@@ -185,10 +185,12 @@ function AddChannel({ onAdded }: { onAdded: (channel: NotificationChannel) => vo
 
   return (
     <form className="card full channel-form" onSubmit={submit}>
-      <h2 className="card-label">Add a channel</h2>
+      <h2 className="card-label">Add a Slack webhook</h2>
       <p className="card-subtitle">
-        In Slack, create an <strong>Incoming Webhook</strong> for the channel you want events in,
-        then paste its URL here. The URL is stored locally and never shown again.
+        In Slack, add an <strong>Incoming Webhook</strong> and pick the channel there, then paste
+        the URL here. The URL is stored locally and never shown again. Shopify&rsquo;s Partner API
+        does not include the merchant&rsquo;s email, so messages carry the store name, store URL,
+        and plan.
       </p>
 
       <div className="field-row">
@@ -299,8 +301,9 @@ export function Notifications() {
         <div className="notice">
           <h2>No channels yet</h2>
           <p>
-            Add a Slack webhook above, then switch on the events you want. Notifications are sent
-            after each sync, so they arrive within a few minutes of the merchant action.
+            Add a Slack webhook above, then switch on installs, upgrades, downgrades, and
+            uninstalls. Notifications are sent after each sync, so they arrive within a few minutes
+            of the merchant action.
           </p>
         </div>
       ) : (

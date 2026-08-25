@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { fetchCustomers, type CustomerStatus, type CustomerSummary } from '../api';
+import { fetchCustomers, type CustomerListFilter, type CustomerStatus, type CustomerSummary } from '../api';
 import { formatFullDate, formatValue } from '../format';
 
 /**
@@ -42,7 +42,20 @@ function useDebounced<T>(value: T, delay: number): T {
   return settled;
 }
 
-export function Customers({ appId }: { appId: string }) {
+const FILTER_NOTE: Record<CustomerListFilter, (count: number) => string> = {
+  discounted: (count) =>
+    `${count.toLocaleString()} merchant${count === 1 ? '' : 's'} with a discounted charge`,
+  paying: (count) => `${count.toLocaleString()} paying merchant${count === 1 ? '' : 's'}`,
+  trialing: (count) => `${count.toLocaleString()} merchant${count === 1 ? '' : 's'} on trial`,
+};
+
+export function Customers({
+  appId,
+  filter,
+}: {
+  appId: string;
+  filter?: CustomerListFilter;
+}) {
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState('mrr');
   const [page, setPage] = useState(0);
@@ -57,7 +70,7 @@ export function Customers({ appId }: { appId: string }) {
   // show page four of a result set the reader has not seen page one of.
   useEffect(() => {
     setPage(0);
-  }, [debounced, sort, appId]);
+  }, [debounced, sort, appId, filter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,6 +81,7 @@ export function Customers({ appId }: { appId: string }) {
       limit: PAGE_SIZE,
       offset: page * PAGE_SIZE,
       appId,
+      filter,
     })
       .then((result) => {
         if (cancelled) return;
@@ -84,7 +98,7 @@ export function Customers({ appId }: { appId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [debounced, sort, page, appId]);
+  }, [debounced, sort, page, appId, filter]);
 
   const currency = useMemo(
     () => rows.find((row) => row.currency)?.currency ?? null,
@@ -122,7 +136,7 @@ export function Customers({ appId }: { appId: string }) {
         <p className="control-note">
           {loading && rows.length === 0
             ? 'Searching…'
-            : `${total.toLocaleString()} merchant${total === 1 ? '' : 's'}${
+            : `${filter ? FILTER_NOTE[filter](total) : `${total.toLocaleString()} merchant${total === 1 ? '' : 's'}`}${
                 debounced ? ` matching “${debounced}”` : ''
               }.`}
         </p>
@@ -141,7 +155,9 @@ export function Customers({ appId }: { appId: string }) {
           <p>
             {debounced
               ? 'Nothing matches that name or domain. Search matches the store name and the myshopify domain.'
-              : 'Run npm run sync to pull your Partner API history, then reload.'}
+              : filter
+                ? 'Nobody is in this figure right now.'
+                : 'Run npm run sync to pull your Partner API history, then reload.'}
           </p>
         </div>
       ) : null}

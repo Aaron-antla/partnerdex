@@ -1,15 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import type { MetricResponse } from '../api';
 import { formatValue } from '../format';
 import type { CardSpec } from '../pages';
-import {
-  BarPlot,
-  DataTable,
-  LinePlot,
-  StackedAreaPlot,
-  useChartData,
-  type ChartSeries,
-} from './Chart';
+import { BarPlot, LinePlot, StackedAreaPlot, useChartData, type ChartSeries } from './Chart';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
 /**
  * Categorical slots 1-4, in their fixed order — slot 1 is the brand. Assign by
@@ -40,12 +34,13 @@ const TONE = {
 export function MetricCard({
   spec,
   metric,
+  href,
 }: {
   spec: CardSpec;
   metric: MetricResponse | undefined;
+  /** Opens the merchants in this figure. Absent when the metric is not a population. */
+  href?: string;
 }) {
-  const [showTable, setShowTable] = useState(false);
-
   const breakdown = spec.breakdown ? metric?.series ?? [] : [];
 
   const series = useMemo<ChartSeries[]>(() => {
@@ -73,13 +68,28 @@ export function MetricCard({
   );
   const data = useChartData(breakdown.length > 0 ? breakdown : total);
 
+  const title = href ? (
+    <a
+      href={href}
+      className="text-inherit no-underline decoration-muted-foreground/70 underline-offset-4 hover:underline"
+    >
+      {spec.label}
+    </a>
+  ) : (
+    spec.label
+  );
+
   if (!metric) {
     return (
-      <section className={spec.full ? 'card full' : 'card'}>
-        <h2 className="card-label">{spec.label}</h2>
-        <div className="card-value">—</div>
-        <div className="card-delta">Not available</div>
-      </section>
+      <Card className={spec.full ? 'card full' : 'card'}>
+        <CardHeader>
+          <CardTitle>{title}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="card-value">—</div>
+          <div className="card-delta">Not available</div>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -119,56 +129,32 @@ export function MetricCard({
     );
 
   return (
-    <section className={spec.full ? 'card full' : 'card'}>
-      <div className="card-head">
-        <div>
-          <h2 className="card-label">{spec.label}</h2>
-          {spec.subtitle ? <p className="card-subtitle">{spec.subtitle}</p> : null}
+    <Card className={spec.full ? 'card full' : 'card'}>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        {spec.subtitle ? <CardDescription>{spec.subtitle}</CardDescription> : null}
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="card-value">
+          {formatValue(metric.value, format, currency, { compact: format !== 'money' })}
         </div>
-        {/* Multi-series cards owe the reader a table: past two series, colour
-            alone stops being a reliable way to pick one out. */}
+
+        <Comparison metric={metric} invert={spec.invertDelta ?? false} />
+
         {series.length > 1 ? (
-          <button
-            type="button"
-            className="card-toggle"
-            onClick={() => setShowTable((current) => !current)}
-            aria-pressed={showTable}
-          >
-            {showTable ? 'Chart' : 'Table'}
-          </button>
+          <div className="legend">
+            {series.map((item) => (
+              <span className="legend-item" key={item.key}>
+                <span className="legend-swatch" style={{ background: item.color }} />
+                {item.name}
+              </span>
+            ))}
+          </div>
         ) : null}
-      </div>
 
-      <div className="card-value">
-        {/* Revenue figures show their exact value; counts may still compact. */}
-        {formatValue(metric.value, format, currency, { compact: format !== 'money' })}
-      </div>
-
-      <Comparison metric={metric} invert={spec.invertDelta ?? false} />
-
-      {series.length > 1 ? (
-        <div className="legend">
-          {series.map((item) => (
-            <span className="legend-item" key={item.key}>
-              <span className="legend-swatch" style={{ background: item.color }} />
-              {item.name}
-            </span>
-          ))}
-        </div>
-      ) : null}
-
-      {showTable ? (
-        <DataTable
-          series={series}
-          data={data}
-          format={format}
-          currency={currency}
-          interval={interval}
-        />
-      ) : (
-        plot
-      )}
-    </section>
+        {plot}
+      </CardContent>
+    </Card>
   );
 }
 

@@ -4,6 +4,7 @@ import { buildContext, MetricRequestError, type MetricContext, type RawMetricQue
 import type { MetricComparison, MetricResponse } from './response.js';
 import {
   arrReport,
+  discountedMrrReport,
   grossEarningsReport,
   mrrByAppReport,
   mrrGrowthReport,
@@ -48,6 +49,13 @@ export const METRICS: MetricDefinition[] = [
     label: 'MRR',
     description: 'Monthly recurring revenue reconstructed as-of each bucket.',
     run: mrrReport,
+  },
+  {
+    key: 'discounted_mrr',
+    label: 'Discounted MRR',
+    description:
+      'MRR from unique, custom, and beta charges, plus catalog plans billed below list.',
+    run: discountedMrrReport,
   },
   {
     key: 'arr',

@@ -158,6 +158,109 @@ describe('as-of MRR reconstruction (spec 7.1)', () => {
   });
 });
 
+describe('discounted MRR', () => {
+  beforeEach(() => resetEnvironment());
+
+  it('leaves a catalog plan billed at list out of the slice', () => {
+    seed([
+      {
+        chargeRef: '1',
+        shopId: '10',
+        amount: 49.99,
+        planName: 'Runway',
+        activatedAt: '2024-02-01T00:00:00Z',
+        firstSaleAt: '2024-02-01T00:00:00Z',
+      },
+    ]);
+
+    assert.equal(runMetric('mrr', monthly, { now: NOW }).value, 49.99);
+    assert.equal(runMetric('discounted_mrr', monthly, { now: NOW }).value, 0);
+  });
+
+  it('counts a unique UUID plan and a Custom- plan', () => {
+    seed([
+      {
+        chargeRef: '1',
+        shopId: '10',
+        amount: 699.99,
+        planName: 'Unlimited Haute Couture-f89add45-87c0-4db9-b93c-f1c2dace0b80',
+        activatedAt: '2024-02-01T00:00:00Z',
+        firstSaleAt: '2024-02-01T00:00:00Z',
+      },
+      {
+        chargeRef: '2',
+        shopId: '11',
+        amount: 399.99,
+        planName: 'Custom-2000-7a383a73-802e-409c-93ae-66fcba1b65f1',
+        activatedAt: '2024-02-01T00:00:00Z',
+        firstSaleAt: '2024-02-01T00:00:00Z',
+      },
+      {
+        chargeRef: '3',
+        shopId: '12',
+        amount: 19.99,
+        planName: 'Trend',
+        activatedAt: '2024-02-01T00:00:00Z',
+        firstSaleAt: '2024-02-01T00:00:00Z',
+      },
+    ]);
+
+    const discounted = runMetric('discounted_mrr', monthly, { now: NOW });
+    assert.equal(runMetric('mrr', monthly, { now: NOW }).value, 1119.97);
+    assert.equal(discounted.value, 1099.98);
+    const custom = discounted.series?.find((item) => item.key === 'custom');
+    assert.ok(custom);
+    assert.equal(custom.data.at(-1)?.value, 1099.98);
+
+    const listed = listCustomers({ filter: 'discounted' });
+    assert.equal(listed.total, 2);
+    assert.deepEqual(
+      listed.customers.map((row) => row.shopId).sort(),
+      ['10', '11'],
+    );
+  });
+
+  it('counts a catalog plan only after its latest sale falls below list', () => {
+    seed([
+      {
+        chargeRef: '1',
+        shopId: '10',
+        amount: 299.99,
+        planName: 'Haute Couture',
+        activatedAt: '2024-02-01T00:00:00Z',
+        firstSaleAt: '2024-02-01T00:00:00Z',
+        extraSales: [{ at: '2024-04-01T00:00:00Z', gross: 149.99 }],
+      },
+    ]);
+
+    const response = runMetric('discounted_mrr', monthly, { now: NOW });
+    assert.equal(pointAt(response, '2024-03'), 0, 'full-price sale is not a discount');
+    assert.equal(pointAt(response, '2024-04'), 299.99, 'half-price sale brings the contracted MRR into the slice');
+    const catalog = response.series?.find((item) => item.key === 'catalog_discount');
+    assert.ok(catalog);
+    assert.equal(catalog.data.find((row) => row.date.startsWith('2024-04'))?.value, 299.99);
+  });
+
+  it('does not treat a same-second proration plus a full-price sale as a discount', () => {
+    seed([
+      {
+        chargeRef: '1',
+        shopId: '10',
+        amount: 49.99,
+        planName: 'Runway',
+        activatedAt: '2024-02-01T00:00:00Z',
+        firstSaleAt: '2024-02-01T00:00:00Z',
+        extraSales: [
+          { at: '2024-05-01T00:00:00Z', gross: 16 },
+          { at: '2024-05-01T00:00:00Z', gross: 49.99 },
+        ],
+      },
+    ]);
+
+    assert.equal(pointAt(runMetric('discounted_mrr', monthly, { now: NOW }), '2024-05'), 0);
+  });
+});
+
 describe('uninstalls, reinstalls and settlement lag', () => {
   beforeEach(() => resetEnvironment());
 
@@ -989,6 +1092,84 @@ describe('period resolution', () => {
     });
     assert.equal(window.end.getTime(), now.getTime());
   });
+
+  it('resolves today from midnight to the as-of instant', () => {
+    const now = new Date('2024-07-01T15:30:00Z');
+    const window = resolveWindow({
+      period: 'today',
+      timeZone: 'UTC',
+      allTimeStart: '2020-01-01',
+      now,
+    });
+    assert.equal(window.start.toISOString(), '2024-07-01T00:00:00.000Z');
+    assert.equal(window.end.toISOString(), now.toISOString());
+  });
+
+  it('resolves yesterday as the previous local day, not including today', () => {
+    const window = resolveWindow({
+      period: 'yesterday',
+      timeZone: 'UTC',
+      allTimeStart: '2020-01-01',
+      now: new Date('2024-07-01T15:30:00Z'),
+    });
+    assert.equal(window.start.toISOString(), '2024-06-30T00:00:00.000Z');
+    assert.equal(window.end.toISOString(), '2024-07-01T00:00:00.000Z');
+  });
+
+  it('treats a custom YYYY-MM-DD pair as a closed local-day span', () => {
+    const window = resolveWindow({
+      period: 'custom',
+      start: '2024-03-01',
+      end: '2024-03-31',
+      timeZone: 'UTC',
+      allTimeStart: '2020-01-01',
+      now: new Date('2024-07-01T00:00:00Z'),
+    });
+    assert.equal(window.period, 'custom');
+    assert.equal(window.start.toISOString(), '2024-03-01T00:00:00.000Z');
+    assert.equal(window.end.toISOString(), '2024-04-01T00:00:00.000Z');
+    assert.equal(window.interval, 'day');
+  });
+
+  it('reconstructs a metric over a custom dashboard range', () => {
+    resetEnvironment();
+    seed([
+      {
+        chargeRef: '1',
+        shopId: '10',
+        amount: 40,
+        activatedAt: '2024-03-10T00:00:00Z',
+        firstSaleAt: '2024-03-10T00:00:00Z',
+      },
+    ]);
+
+    const response = runMetric(
+      'mrr',
+      { period: 'custom', start: '2024-03-01', end: '2024-03-31' },
+      { now: NOW },
+    );
+    assert.equal(response.period, 'custom');
+    assert.equal(response.timeSeriesInterval, 'day');
+    assert.equal(pointAt(response, '2024-03-09'), 0);
+    assert.equal(pointAt(response, '2024-03-10'), 40);
+    assert.equal(response.value, 40);
+  });
+
+  it('refuses a custom range that does not move forward', () => {
+    assert.throws(
+      () =>
+        resolveWindow({
+          period: 'custom',
+          start: '2024-04-01',
+          end: '2024-03-01',
+          timeZone: 'UTC',
+          allTimeStart: '2020-01-01',
+          now: new Date('2024-07-01T00:00:00Z'),
+        }),
+      /start of the range must be before its end/,
+    );
+  });
+
 });
 
 describe('as-of history is reconstructed, not stored', () => {

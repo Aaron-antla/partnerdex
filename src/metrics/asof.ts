@@ -20,6 +20,46 @@ export interface AsOfOptions {
   includeAnnual: boolean;
   /** Gate on activation rather than first payment, so trials count. */
   includeTrials: boolean;
+  /**
+   * Restrict to charges that are not a published catalog plan, or whose latest
+   * settled sale as of the instant is more than 5% below the contracted price.
+   * Used by Discounted MRR so those shops are visible as a slice of headline MRR.
+   */
+  discountedOnly?: boolean;
+}
+
+/**
+ * Shopify custom/negotiated charges append a UUID to the plan name
+ * (`Custom-2000-<uuid>`, `Unlimited Haute Couture-<uuid>`). Catalog plans are
+ * bare names. `_` is one character in LIKE, so this is the UUID tail.
+ */
+export const NON_CATALOG_PLAN_SQL = `(
+  s.plan_name LIKE 'Custom-%'
+  OR s.plan_name LIKE '%-________-____-____-____-____________'
+)`;
+
+/**
+ * Latest AppSubscriptionSale before `asOfExpr` is more than 5% below the
+ * contracted charge. Compared to `s.amount` (the sticker), not monthly_amount,
+ * so an annual plan discounted on the yearly invoice still matches.
+ */
+export function catalogDiscountSql(asOfExpr: string): string {
+  return `(
+    SELECT MAX(t.gross_amount) FROM transactions t
+    WHERE t.charge_ref = s.charge_ref
+      AND t.type = 'AppSubscriptionSale'
+      AND t.created_at < ${asOfExpr}
+      AND t.created_at = (
+        SELECT MAX(t2.created_at) FROM transactions t2
+        WHERE t2.charge_ref = s.charge_ref
+          AND t2.type = 'AppSubscriptionSale'
+          AND t2.created_at < ${asOfExpr}
+      )
+  ) < s.amount * 0.95`;
+}
+
+export function discountedChargeSql(asOfExpr: string): string {
+  return `(${NON_CATALOG_PLAN_SQL} OR ${catalogDiscountSql(asOfExpr)})`;
 }
 
 export interface Fragment {
@@ -85,6 +125,7 @@ export function asOfPredicate(options: AsOfOptions, asOfExpr: string): Fragment 
   );
 
   if (!options.includeAnnual) clauses.push(`s.billing_interval <> 'ANNUAL'`);
+  if (options.discountedOnly) clauses.push(discountedChargeSql(asOfExpr));
 
   return { sql: clauses.join('\n           AND '), params: apps.params };
 }
@@ -147,6 +188,39 @@ export function stockSeries(db: Db, buckets: Bucket[], options: AsOfOptions): St
        ORDER BY b.idx`,
     )
     .all({ ...cte.params, ...predicate.params }) as StockPoint[];
+}
+
+export interface DiscountedStockPoint {
+  idx: number;
+  customMrr: number;
+  catalogDiscountMrr: number;
+}
+
+/**
+ * Discounted MRR split by why the charge qualifies: a unique/custom plan name,
+ * or a catalog plan whose latest sale as of the bucket is below list.
+ */
+export function discountedStockSeries(
+  db: Db,
+  buckets: Bucket[],
+  options: AsOfOptions,
+): DiscountedStockPoint[] {
+  const cte = bucketsCte(buckets);
+  const predicate = asOfPredicate({ ...options, discountedOnly: true }, 'b.as_of');
+
+  return db
+    .prepare(
+      `WITH ${cte.sql}
+       SELECT b.idx AS idx,
+              COALESCE(SUM(CASE WHEN ${NON_CATALOG_PLAN_SQL} THEN s.monthly_amount ELSE 0 END), 0) AS customMrr,
+              COALESCE(SUM(CASE WHEN NOT ${NON_CATALOG_PLAN_SQL} THEN s.monthly_amount ELSE 0 END), 0) AS catalogDiscountMrr
+       FROM buckets b
+       LEFT JOIN subscriptions s
+         ON ${predicate.sql}
+       GROUP BY b.idx
+       ORDER BY b.idx`,
+    )
+    .all({ ...cte.params, ...predicate.params }) as DiscountedStockPoint[];
 }
 
 export interface AppStockPoint {

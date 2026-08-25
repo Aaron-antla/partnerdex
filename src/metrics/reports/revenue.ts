@@ -1,4 +1,10 @@
-import { bucketsCte, stockSeries, stockSeriesByApp, usageSeries } from '../asof.js';
+import {
+  bucketsCte,
+  discountedStockSeries,
+  stockSeries,
+  stockSeriesByApp,
+  usageSeries,
+} from '../asof.js';
 import type { MetricContext } from '../context.js';
 import { growthFrom } from '../growth.js';
 import { buildResponse, type MetricResponse, type NamedSeries } from '../response.js';
@@ -94,6 +100,62 @@ export function mrrReport(context: MetricContext): MetricResponse {
       includeAnnual: context.asOf.includeAnnual,
       includeUsage: context.includeUsage,
       includeTrials: context.asOf.includeTrials,
+    },
+  });
+}
+
+/**
+ * The slice of headline MRR that lives on a non-catalog charge, or on a
+ * catalog charge whose latest settled sale is more than 5% below list.
+ *
+ * Partner API `charge.amount` is the contracted price, so headline MRR is
+ * right and still hides these shops inside the total. This report is that
+ * total with everything else stripped out, reconstructed as-of each bucket.
+ */
+export function discountedMrrReport(context: MetricContext): MetricResponse {
+  const points = discountedStockSeries(context.db, context.bucketsWithLead, context.asOf);
+  const byIndex = new Map(points.map((point) => [point.idx, point]));
+
+  const custom: number[] = [];
+  const catalog: number[] = [];
+  const total: number[] = [];
+  for (let idx = 0; idx < context.bucketsWithLead.length; idx += 1) {
+    const point = byIndex.get(idx);
+    const c = point?.customMrr ?? 0;
+    const d = point?.catalogDiscountMrr ?? 0;
+    custom.push(c);
+    catalog.push(d);
+    total.push(c + d);
+  }
+
+  const [leading, ...visible] = total;
+  const dates = context.window.buckets.map((bucket) => bucket.start.toISOString());
+  const seriesFor = (key: string, name: string, values: number[]): NamedSeries => ({
+    key,
+    name,
+    data: dates.map((date, index) => ({
+      date,
+      value: Math.round((values[index] ?? 0) * 100) / 100,
+    })),
+  });
+
+  return buildResponse({
+    metric: 'discounted_mrr',
+    kind: 'stock',
+    format: 'money',
+    window: context.window,
+    values: visible,
+    leadingValue: leading ?? null,
+    currency: context.currency,
+    series: [
+      seriesFor('custom', 'Unique & custom plans', custom.slice(1)),
+      seriesFor('catalog_discount', 'Catalog plans billed below list', catalog.slice(1)),
+    ],
+    meta: {
+      includeAnnual: context.asOf.includeAnnual,
+      includeTrials: context.asOf.includeTrials,
+      note:
+        'Unique/custom plans are charges whose name carries a UUID or starts with Custom-. Catalog discounts are list-price plans whose latest sale is more than 5% below the contracted amount.',
     },
   });
 }

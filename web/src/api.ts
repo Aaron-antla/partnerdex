@@ -82,6 +82,12 @@ export interface QueryState {
    * override it there would put the axis at odds with the figures beside it.
    */
   granularity: Granularity;
+  /**
+   * Inclusive calendar bounds for `period=custom`, as `YYYY-MM-DD`. Empty on
+   * presets — the server measures those backwards from now.
+   */
+  start: string;
+  end: string;
 }
 
 /**
@@ -95,9 +101,10 @@ export function toSearchParams(query: QueryState): URLSearchParams {
     includeUsage: String(query.includeUsage),
     includeTrials: String(query.includeTrials),
   });
-  // No `end` either: the dashboard always reads as of now. The server still
-  // honours the parameter, so an as-of reconstruction stays available to
-  // anything calling the API directly.
+  if (query.period === 'custom') {
+    if (query.start) params.set('start', query.start);
+    if (query.end) params.set('end', query.end);
+  }
   if (query.appId) params.set('appIds', query.appId);
   if (query.rating) params.set('rating', String(query.rating));
   return params;
@@ -110,6 +117,9 @@ export function toSearchParams(query: QueryState): URLSearchParams {
  * discovers it — polling status at 3am included.
  */
 export const SIGNED_OUT_EVENT = 'partnerdex:signed-out';
+
+const API_UNAVAILABLE_MESSAGE =
+  'The dashboard API is not on this Worker. Antla Analytics metrics run in the Node process (npm start, or Fly.io in DEPLOY.md).';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -130,7 +140,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   }
   // 204 on delete: there is no body to parse.
   if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+  const contentType = response.headers.get('content-type') ?? '';
+  const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase();
+  const body = await response.text();
+  const isJson = mediaType === 'application/json' || mediaType?.endsWith('+json');
+  const isHtml = body.trimStart().startsWith('<');
+
+  if (!isJson || isHtml) throw new Error(API_UNAVAILABLE_MESSAGE);
+
+  return JSON.parse(body) as T;
 }
 
 const getJson = <T,>(url: string): Promise<T> => request<T>(url);
@@ -274,12 +292,15 @@ export interface CustomerApp {
   review: ReviewSummary | null;
 }
 
+export type CustomerListFilter = 'discounted' | 'paying' | 'trialing';
+
 export const fetchCustomers = (options: {
   search?: string;
   sort?: string;
   limit?: number;
   offset?: number;
   appId?: string;
+  filter?: CustomerListFilter;
 }): Promise<CustomerListResult> => {
   const params = new URLSearchParams();
   if (options.search) params.set('q', options.search);
@@ -287,6 +308,7 @@ export const fetchCustomers = (options: {
   if (options.limit) params.set('limit', String(options.limit));
   if (options.offset) params.set('offset', String(options.offset));
   if (options.appId) params.set('appIds', options.appId);
+  if (options.filter) params.set('filter', options.filter);
   return getJson<CustomerListResult>(`/api/customers?${params.toString()}`);
 };
 
@@ -527,11 +549,19 @@ export const fetchFunnel = (options: {
   appId?: string;
   period: string;
   granularity: Granularity;
+  start?: string;
+  end?: string;
 }): Promise<FunnelResponse> => {
   const params = new URLSearchParams({ granularity: options.granularity });
   // The range is the granularity's own when the columns are a fixed span; the
   // server ignores a period there, and sending one would imply otherwise.
-  if (options.granularity !== 'previous_7_days') params.set('period', options.period);
+  if (options.granularity !== 'previous_7_days') {
+    params.set('period', options.period);
+    if (options.period === 'custom') {
+      if (options.start) params.set('start', options.start);
+      if (options.end) params.set('end', options.end);
+    }
+  }
   if (options.appId) params.set('appIds', options.appId);
   return getJson<FunnelResponse>(`/api/funnel?${params.toString()}`);
 };

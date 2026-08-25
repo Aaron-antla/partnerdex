@@ -3,7 +3,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getConfig } from '../config.js';
-import { getCustomer, listCustomers, searchMerchants, type CustomerSort } from '../customers/index.js';
+import {
+  getCustomer,
+  listCustomers,
+  searchMerchants,
+  type CustomerListFilter,
+  type CustomerSort,
+} from '../customers/index.js';
 import { getDb } from '../db/index.js';
 import { type RawMetricQuery } from '../metrics/context.js';
 import { listMetrics, runMetric } from '../metrics/registry.js';
@@ -30,6 +36,7 @@ import { funnelReport } from '../metrics/reports/funnel.js';
 /** Everything the dashboard renders, so one request paints the whole page. */
 const HEADLINE_METRICS = [
   'mrr',
+  'discounted_mrr',
   'arr',
   'gross_earnings',
   'one_time_charges',
@@ -260,6 +267,7 @@ export function createApp(): express.Express {
           limit: Number.isFinite(limit) ? limit : undefined,
           offset: Number.isFinite(offset) ? offset : undefined,
           appIds: appIds ? appIds.split(',').filter(Boolean) : [],
+          filter: pick('filter') as CustomerListFilter | undefined,
         }),
       );
     } catch (error) {
@@ -394,11 +402,32 @@ export function createApp(): express.Express {
   });
 
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const webRoot = path.resolve(here, '../web');
-  if (fs.existsSync(webRoot)) {
+  // Production (`node dist/cli.js`) lives in dist/server → dist/web.
+  // `tsx` in `npm run dev` lives in src/server, so also look at the built
+  // bundle from the project root. Without this, localhost:8787 is a bare
+  // Express 404 during development.
+  const webRoots = [path.resolve(here, '../web'), path.resolve(here, '../../dist/web')];
+  const webRoot = webRoots.find((dir) => fs.existsSync(path.join(dir, 'index.html')));
+  if (webRoot) {
     app.use(express.static(webRoot));
     app.get('*', (_request, response) => {
       response.sendFile(path.join(webRoot, 'index.html'));
+    });
+  } else {
+    const viteDev = 'http://localhost:5173';
+    app.get('/', (_request, response) => {
+      response.redirect(302, viteDev);
+    });
+    app.get('*', (request, response, next) => {
+      if (request.path.startsWith('/api')) {
+        next();
+        return;
+      }
+      response.status(404).type('html').send(
+        `<!doctype html><meta charset="utf-8"><title>Antla Analytics</title>
+<p>The API is running, but the dashboard bundle is not here.</p>
+<p>Open <a href="${viteDev}">${viteDev}</a> during development, or run <code>npm run build</code>.</p>`,
+      );
     });
   }
 
