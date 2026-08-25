@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
-import { APP_ID, pointAt, resetEnvironment, seed, seedForApp } from './helpers.js';
+import { APP_ID, pointAt, resetEnvironment, seed, seedForApp, seedOneTimeCharges } from './helpers.js';
 import { runMetric } from '../src/metrics/registry.js';
 import { monthlyAmountFor } from '../src/sync/derive.js';
 import { autoInterval, resolveWindow } from '../src/metrics/time.js';
@@ -499,6 +499,50 @@ describe('summaries, edge buckets and guards', () => {
 
     assert.equal(pointAt(runMetric('arpu', monthly, { now: NOW }), '2024-03'), 75);
     assert.equal(pointAt(runMetric('active_subscriptions', monthly, { now: NOW }), '2024-03'), 2);
+  });
+});
+
+describe('one-time charges', () => {
+  beforeEach(() => resetEnvironment());
+
+  it('sums AppOneTimeSale cash by bucket and leaves MRR untouched', () => {
+    seed([
+      {
+        chargeRef: '1',
+        shopId: '10',
+        amount: 50,
+        activatedAt: '2024-01-05T00:00:00Z',
+        firstSaleAt: '2024-01-05T00:00:00Z',
+        extraSales: [
+          { at: '2024-03-05T00:00:00Z', gross: 50 },
+          { at: '2024-05-05T00:00:00Z', gross: 50 },
+        ],
+      },
+    ]);
+    seedOneTimeCharges([
+      { id: 'ot-1', shopId: '10', amount: 16, at: '2024-03-15T00:00:00Z' },
+      { id: 'ot-2', shopId: '11', amount: 16, at: '2024-05-10T00:00:00Z' },
+    ]);
+
+    const oneTime = runMetric('one_time_charges', monthly, { now: NOW });
+    assert.equal(oneTime.value, 32, 'headline is the period sum');
+    assert.equal(pointAt(oneTime, '2024-03'), 16);
+    assert.equal(pointAt(oneTime, '2024-04'), 0, 'empty buckets stay zero');
+    assert.equal(pointAt(oneTime, '2024-05'), 16);
+
+    const mrr = runMetric('mrr', monthly, { now: NOW });
+    assert.equal(mrr.value, 50, 'one-time cash is not a live contract');
+    assert.equal(pointAt(mrr, '2024-03'), 50);
+    assert.equal(pointAt(mrr, '2024-05'), 50);
+
+    const earnings = runMetric('gross_earnings', monthly, { now: NOW });
+    assert.equal(earnings.value, 182, 'gross still includes the one-time sales');
+    const oneTimeSeries = earnings.series?.find((item) => item.key === 'oneTime');
+    assert.ok(oneTimeSeries, 'gross earnings still breaks one-time out');
+    const march = oneTimeSeries.data.find((point) => point.date.startsWith('2024-03'));
+    const may = oneTimeSeries.data.find((point) => point.date.startsWith('2024-05'));
+    assert.equal(march?.value, 16);
+    assert.equal(may?.value, 16);
   });
 });
 
