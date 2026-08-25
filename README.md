@@ -81,7 +81,9 @@ npm test
 
 PartnerDex is designed to run as a single-node process on a single machine with a persistent volume for the SQLite database.
 
-For quick and easy production deployment using Fly.io, refer to the detailed guide in [DEPLOY.md](DEPLOY.md).
+For production (Express API + SQLite), refer to the detailed guide in [DEPLOY.md](DEPLOY.md).
+
+GitHub is also connected to Cloudflare Workers Builds. That host can only serve the Vite dashboard as static assets — the API and SQLite store stay on the Node process. `wrangler.jsonc` is required so deploys skip interactive autoconfig; it points assets at `dist/web`. `/api` on that Worker returns JSON 503 so the SPA does not parse itself as an API response.
 
 ---
 

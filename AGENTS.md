@@ -20,5 +20,5 @@ Metrics are one implementation with three registrations. Implement the report in
 ### Lint / test / build
 - Lint / static check: `npm run typecheck` (there is no ESLint config; this is the only static check).
 - Tests: `npm test` (Node's built-in runner over `test/*.test.ts`, in-memory SQLite, no external services).
-- Build: `npm run build` (`tsc` server → `dist/`, `vite build` web → `dist/web`); run with `npm start`.
+- Build: `npm run build` (`tsc` server → `dist/`, `vite build` web → `dist/web`); run with `npm start`. GitHub Workers Builds uses `npm run build` then `npx wrangler deploy`. Keep `wrangler.jsonc` (assets `dist/web`) so CI does not run interactive autoconfig and fail. The Worker is the dashboard shell only — `/api` is 503 JSON. Production metrics stay on Fly / `npm start`.
 - `better-sqlite3` is a native module (prebuilt binary on install). If the Node version changes, reinstall deps so its binary matches.

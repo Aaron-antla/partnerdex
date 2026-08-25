@@ -14,6 +14,8 @@
     "build": "npm run build:server && npm run build:web",
     "build:server": "tsc -p tsconfig.json",
     "build:web": "vite build",
+    "preview": "npm run build:web && wrangler dev",
+    "deploy": "npm run build:web && wrangler deploy",
     "dev": "concurrently -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "tsx watch src/cli.ts serve",
     "dev:web": "vite",
@@ -22,7 +24,7 @@
     "doctor": "tsx src/cli.ts doctor",
     "validate": "tsx src/cli.ts validate",
     "start": "node dist/cli.js serve",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
     "test": "node --test --import tsx test/*.test.ts"
   },
   "dependencies": {
@@ -45,6 +47,7 @@
     "recharts": "^2.13.3",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
-    "vite": "^6.4.3"
+    "vite": "^6.4.3",
+    "wrangler": "^4.125.0"
   }
 }
