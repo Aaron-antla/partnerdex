@@ -46,6 +46,7 @@ const HEADLINE_METRICS = [
   'ltv',
   'trials',
   'on_trial',
+  'trialing',
   'trial_conversion_rate',
   'active_subscriptions',
   'subscribers',

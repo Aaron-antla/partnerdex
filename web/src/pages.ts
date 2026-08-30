@@ -238,6 +238,12 @@ const SUBSCRIPTIONS: PageSpec = {
       plot: 'line',
     },
     {
+      metric: 'trialing',
+      label: 'Trialing',
+      subtitle: 'Current trial value on each expected end date.',
+      plot: 'bar',
+    },
+    {
       metric: 'trial_conversion_rate',
       label: 'Trial conversion',
       subtitle: 'Share of decided trials that reached a paid charge.',
