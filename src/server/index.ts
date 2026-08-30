@@ -41,6 +41,7 @@ const HEADLINE_METRICS = [
   'gross_earnings',
   'one_time_charges',
   'mrr_growth',
+  'mrr_movement',
   'mrr_by_app',
   'arpu',
   'ltv',

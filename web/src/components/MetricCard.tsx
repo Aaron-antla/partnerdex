@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import type { MetricResponse } from '../api';
 import { formatValue } from '../format';
 import type { CardSpec } from '../pages';
-import { BarPlot, LinePlot, StackedAreaPlot, useChartData, type ChartSeries } from './Chart';
+import { BarPlot, DataTable, LinePlot, StackedAreaPlot, useChartData, type ChartSeries } from './Chart';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
 /**
@@ -41,18 +41,20 @@ export function MetricCard({
   /** Opens the merchants in this figure. Absent when the metric is not a population. */
   href?: string;
 }) {
-  const breakdown = spec.breakdown ? metric?.series ?? [] : [];
+  const isTable = spec.plot === 'table';
+  const breakdown = spec.breakdown || isTable ? metric?.series ?? [] : [];
 
   const series = useMemo<ChartSeries[]>(() => {
     if (breakdown.length > 0) {
-      return breakdown.slice(0, SLOT.length).map((item, index) => ({
+      const visible = isTable ? breakdown : breakdown.slice(0, SLOT.length);
+      return visible.map((item, index) => ({
         key: item.key,
         name: item.name,
-        color: SLOT[index]!,
+        color: SLOT[index % SLOT.length]!,
       }));
     }
     return [{ key: 'value', name: spec.label, color: spec.tone ? TONE[spec.tone] : SLOT[0]! }];
-  }, [breakdown, spec.label, spec.tone]);
+  }, [breakdown, isTable, spec.label, spec.tone]);
 
   const total = useMemo(
     () => [
@@ -99,7 +101,15 @@ export function MetricCard({
   const height = spec.full ? 260 : 150;
 
   const plot =
-    spec.plot === 'area' ? (
+    spec.plot === 'table' ? (
+      <DataTable
+        series={series}
+        data={data}
+        format={format}
+        currency={currency}
+        interval={interval}
+      />
+    ) : spec.plot === 'area' ? (
       <StackedAreaPlot
         data={data}
         series={series}
@@ -141,7 +151,7 @@ export function MetricCard({
 
         <Comparison metric={metric} invert={spec.invertDelta ?? false} />
 
-        {series.length > 1 ? (
+        {series.length > 1 && spec.plot !== 'table' ? (
           <div className="legend">
             {series.map((item) => (
               <span className="legend-item" key={item.key}>
