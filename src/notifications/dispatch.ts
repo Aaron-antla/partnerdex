@@ -9,6 +9,9 @@ import { DAILY_REPORT, topicByKey } from './topics.js';
 /**
  * Deciding what to say, and saying it exactly once.
  *
+ * Event topics read `customer_events`. Digest topics assemble yesterday's
+ * metrics. Both share the webhook, the delivery ledger, and this pass.
+ *
  * The hard part is not the HTTP request. `customer_events` is dropped and
  * rewritten on every sync, so "what is new since last time" is not a question
  * that table can answer — every row in it is new every time. Three rules stand
