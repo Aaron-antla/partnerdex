@@ -21,7 +21,9 @@ PartnerDex is pre-configured for deployment on Fly.io using the template `fly.ex
 
 Production for this fork is the Fly app **`partnerdex-antla`** (`https://partnerdex-antla.fly.dev`). That is the host with the live SQLite volume and Partner sync. The Cloudflare Worker is not this; it has no API.
 
-After the first-time setup below, **pushing or merging `main` is go-live.** GitHub Actions workflow `Fly Deploy` (`.github/workflows/fly.yml`) waits for the `CI` workflow to pass on `main`, then runs `flyctl deploy --remote-only --ha=false` against `partnerdex-antla`. Add a repository Actions secret named `FLY_API_TOKEN` (create it with `fly tokens create deploy -x 999999h -a partnerdex-antla`, and paste the whole value including the `FlyV1 ` prefix). Until that secret exists, merges still update the Worker and leave Fly on the previous image. You can also run the workflow by hand from the Actions tab (`workflow_dispatch`).
+After the first-time setup below, **pushing or merging `main` is go-live.** Cloud agents deploy immediately with the env secret `Flyio` (`export FLY_API_TOKEN="$Flyio"`, then `flyctl config save --app partnerdex-antla --yes` and `flyctl deploy --remote-only --ha=false --app partnerdex-antla`). Do not wait on a GitHub secret when `Flyio` is already in the environment.
+
+GitHub Actions workflow `Fly Deploy` (`.github/workflows/fly.yml`) is the same deploy for merges without an agent. It waits for `CI` on `main`, then deploys `partnerdex-antla`. That job needs a repository Actions secret named `FLY_API_TOKEN` (the same token as `Flyio`). You can also run the workflow by hand from the Actions tab (`workflow_dispatch`).
 
 Do not point deploys at `partnerdex.fly.dev`. Do not run `fly launch` against the existing app.
 
