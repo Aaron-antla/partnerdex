@@ -19,6 +19,12 @@ PartnerDex is designed as a single, lightweight Node.js process. It runs an Expr
 
 PartnerDex is pre-configured for deployment on Fly.io using the template `fly.example.toml`.
 
+Production for this fork is the Fly app **`partnerdex-antla`** (`https://partnerdex-antla.fly.dev`). That is the host with the live SQLite volume and Partner sync. The Cloudflare Worker is not this; it has no API.
+
+After the first-time setup below, **pushing or merging `main` is go-live.** GitHub Actions workflow `Fly Deploy` (`.github/workflows/fly.yml`) waits for the `CI` workflow to pass on `main`, then runs `flyctl deploy --remote-only --ha=false` against `partnerdex-antla`. Add a repository Actions secret named `FLY_API_TOKEN` (create it with `fly tokens create deploy -x 999999h -a partnerdex-antla`, and paste the whole value including the `FlyV1 ` prefix). Until that secret exists, merges still update the Worker and leave Fly on the previous image. You can also run the workflow by hand from the Actions tab (`workflow_dispatch`).
+
+Do not point deploys at `partnerdex.fly.dev`. Do not run `fly launch` against the existing app.
+
 ### Step 2.1. Prerequisites
 1. Install `flyctl` and authenticate with your Fly.io account:
    ```bash
@@ -58,10 +64,13 @@ Open your `fly.toml` and define your credentials directly within the `[env]` sec
 *Note: Since these credentials live in a gitignored `fly.toml` file, keep this file secure. If you lose `fly.toml`, you must rebuild your configuration.*
 
 ### Step 2.5. Deploy the application
-Deploy PartnerDex to Fly.io:
+The first deploy is local, from a gitignored `fly.toml` that holds credentials:
+
 ```bash
 fly deploy
 ```
+
+Later deploys happen when `main` is updated (see the go-live note at the start of this section). A laptop `fly deploy` still works if you have that `fly.toml`; it is not required once `FLY_API_TOKEN` is in GitHub Actions.
 
 On first startup, the server automatically initializes an empty SQLite database and starts backfilling historical records from `SYNC_START_DATE`. You can monitor the process by reading the logs:
 ```bash
@@ -71,9 +80,9 @@ fly logs
 ### Step 2.6. Verify the deployment
 Verify that the application is running and accessible:
 ```bash
-curl https://<your-app-name>.fly.dev/api/health
+curl https://partnerdex-antla.fly.dev/api/health
 ```
-The health check endpoint is unprotected and returns `200 OK` when the server is healthy. To access reports, navigate to `https://<your-app-name>.fly.dev` in your browser and log in with your configured password.
+The health check endpoint is unprotected and returns `200 OK` when the server is healthy. To access reports, navigate to `https://partnerdex-antla.fly.dev` in your browser and log in with your configured password.
 
 ---
 

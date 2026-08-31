@@ -22,3 +22,10 @@ Metrics are one implementation with three registrations. Implement the report in
 - Tests: `npm test` (Node's built-in runner over `test/*.test.ts`, in-memory SQLite, no external services).
 - Build: `npm run build` (`tsc` server → `dist/`, `vite build` web → `dist/web`); run with `npm start`. GitHub Workers Builds uses `npm run build` then `npx wrangler deploy`. Keep `wrangler.jsonc` (assets `dist/web`) so CI does not run interactive autoconfig and fail. The Worker is the dashboard shell only — `/api` is 503 JSON. Production metrics stay on Fly / `npm start`.
 - `better-sqlite3` is a native module (prebuilt binary on install). If the Node version changes, reinstall deps so its binary matches.
+
+### Go live / push to production
+Merging or pushing `main` is go-live for **both** hosts:
+- **Fly.io** (`https://partnerdex-antla.fly.dev`) is the real product: Express API, SQLite on the `partnerdex_data` volume, Partner sync, dashboard. After CI on `main` succeeds, `.github/workflows/fly.yml` runs `flyctl deploy` for app `partnerdex-antla`. Confirm Trialing / MRR movement (and anything else you shipped) there, not on the Worker.
+- **Cloudflare Worker** is the static dashboard shell only. Workers Builds already deploys it from `main`. `/api` on that host is 503 JSON by design.
+
+Do not deploy to `partnerdex.fly.dev` (upstream). Do not run `fly launch`, do not create a second machine, and do not create a new volume. `fly.toml` stays gitignored (credentials); the Action pulls the live config with `flyctl config save`. Repo secret `FLY_API_TOKEN` is required (`fly tokens create deploy -x 999999h -a partnerdex-antla`). If that secret is missing, the Worker can still update while Fly stays on the previous image — treat Fly as not shipped.
