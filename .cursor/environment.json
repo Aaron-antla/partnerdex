@@ -1,0 +1,6 @@
+{
+  "name": "PartnerDex",
+  "install": "npm ci\n[ -f .env ] || printf 'PARTNER_API_TOKEN=dev-dummy-token\\nPARTNER_ORGANIZATION_ID=999\\nPARTNER_API_VERSION=2026-07\\nDATABASE_PATH=./data/partnerdex.db\\nPORT=8787\\nDASHBOARD_PASSWORD=\\nSYNC_INTERVAL_MINUTES=0\\nREPORTING_TIMEZONE=UTC\\n' > .env",
+  "start": "npm run dev",
+  "ports": [5173, 8787]
+}
