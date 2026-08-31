@@ -691,6 +691,26 @@ describe('daily report', () => {
     assert.ok(sent.every((message) => message.text === 'Daily report for March 2, 2024'));
   });
 
+  it('names yesterday in the reporting timezone, not UTC', async () => {
+    resetEnvironment({ REPORTING_TIMEZONE: 'America/New_York' });
+    const db = seed([
+      {
+        chargeRef: 'c1',
+        shopId: '1',
+        amount: 29,
+        activatedAt: '2024-03-01T00:00:00Z',
+        firstSaleAt: '2024-03-01T00:00:00Z',
+      },
+    ]);
+    channelWithTopic(db, '#daily', DAILY_REPORT.key);
+    stubFetch(ok);
+
+    // 04:00 UTC is still 23:00 on March 2 in New York, so yesterday there is March 1.
+    await dispatchPending(db, { now: new Date('2024-03-03T04:00:00Z') });
+
+    assert.equal(sent[0]!.text, 'Daily report for March 1, 2024');
+  });
+
   it('retires the day after a permanent Slack failure', async () => {
     const db = seed([
       {
