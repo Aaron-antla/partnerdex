@@ -1,10 +1,9 @@
 /**
  * What a channel can subscribe to.
  *
- * A topic is a named set of `customer_events` types plus the presentation each
- * one gets in Slack. Keeping it as data rather than as branches in the sender
- * is what makes a second toggle — payments, installs, trials ending — a few
- * lines here and nothing anywhere else.
+ * Event topics name a set of `customer_events` types and digest topics name a
+ * report assembled at dispatch time. Keeping both as data is what lets the
+ * settings page render every toggle without knowing how its messages are built.
  *
  * The types are the *compiled* lifecycle vocabulary from `sync/events.ts`, not
  * the raw Partner feed. That matters more than it looks: the raw feed reports a
@@ -21,6 +20,8 @@ export interface EventPresentation {
   emoji: string;
   tone: EventTone;
 }
+
+export type TopicKind = 'events' | 'digest';
 
 /**
  * One entry per event type a topic covers.
@@ -61,16 +62,35 @@ export interface NotificationTopic {
   key: string;
   label: string;
   description: string;
+  kind: TopicKind;
   /** The `customer_events` types this topic reports on. */
   eventTypes: readonly string[];
   /** What the toggle promises, in the reader's words. Shown on the page. */
   covers: readonly string[];
 }
 
+export const DAILY_REPORT: NotificationTopic = {
+  key: 'daily_report',
+  label: 'Daily report',
+  description:
+    "Once a day, the previous day's MRR, installs, payments, and trial conversions.",
+  kind: 'digest',
+  eventTypes: [],
+  covers: [
+    'MRR',
+    'Active users',
+    'Active subscriptions',
+    'Gross payments',
+    'Trial conversions',
+    'ARPU',
+  ],
+};
+
 export const APP_INSTALL_EVENTS: NotificationTopic = {
   key: 'app_install_events',
   label: 'Installs',
   description: 'A merchant added the app. The plan they signed up to is included when it happened in the same moment.',
+  kind: 'events',
   eventTypes: ['installed', 'reinstalled'],
   covers: ['App installed', 'App reinstalled'],
 };
@@ -79,6 +99,7 @@ export const APP_UPGRADE_EVENTS: NotificationTopic = {
   key: 'app_upgrade_events',
   label: 'Upgrades',
   description: 'A merchant moved to a higher plan, or to a more expensive billing cadence.',
+  kind: 'events',
   eventTypes: ['upgraded'],
   covers: ['Subscription upgraded'],
 };
@@ -87,6 +108,7 @@ export const APP_DOWNGRADE_EVENTS: NotificationTopic = {
   key: 'app_downgrade_events',
   label: 'Downgrades',
   description: 'A merchant moved to a lower plan, or to a cheaper billing cadence.',
+  kind: 'events',
   eventTypes: ['downgraded'],
   covers: ['Subscription downgraded'],
 };
@@ -95,6 +117,7 @@ export const APP_UNINSTALL_EVENTS: NotificationTopic = {
   key: 'app_uninstall_events',
   label: 'Uninstalls',
   description: 'A merchant removed the app. Cancelling a subscription while keeping the app is a different toggle.',
+  kind: 'events',
   eventTypes: ['uninstalled'],
   covers: ['App uninstalled'],
 };
@@ -109,6 +132,7 @@ export const APP_SUBSCRIPTION_EVENTS: NotificationTopic = {
   label: 'Other subscription events',
   description:
     'Trials, freezes, a first paid start, and a subscription cancelled while the app is still installed.',
+  kind: 'events',
   eventTypes: [
     'subscribed',
     'resubscribed',
@@ -146,6 +170,7 @@ export const APP_REVIEW_EVENTS: NotificationTopic = {
   label: 'App Store Reviews',
   description:
     'Reviews appearing on your App Store listing, being rewritten by the merchant, or disappearing from it.',
+  kind: 'events',
   eventTypes: ['review_posted', 'review_edited', 'review_removed'],
   covers: [
     'New review posted',
@@ -155,6 +180,7 @@ export const APP_REVIEW_EVENTS: NotificationTopic = {
 };
 
 export const TOPICS: NotificationTopic[] = [
+  DAILY_REPORT,
   APP_INSTALL_EVENTS,
   APP_UPGRADE_EVENTS,
   APP_DOWNGRADE_EVENTS,
