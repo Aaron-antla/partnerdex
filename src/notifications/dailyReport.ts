@@ -2,18 +2,18 @@ import { getConfig } from '../config.js';
 import type { Db } from '../db/index.js';
 import { runMetric } from '../metrics/registry.js';
 import type { MetricResponse } from '../metrics/response.js';
-import { wallClockIn } from '../metrics/time.js';
+import { addInterval, instantFromWallClock, wallClockIn } from '../metrics/time.js';
 import { resolveScopedAppIds } from '../sync/index.js';
 import { formatMoney, type SlackMessage } from './slack.js';
 
 export interface DailyLevel {
   value: number;
-  /** Vs the previous calendar day. 0 when comparison is missing or unchanged. */
+  /** Vs the same clock window on the previous calendar day. */
   change: number;
 }
 
 export interface DailySnapshot {
-  /** Calendar day being reported, YYYY-MM-DD in REPORTING_TIMEZONE. */
+  /** Calendar day being reported, YYYY-MM-DD in the daily-report timezone. */
   reportDate: string;
   currency: string | null;
   mrr: DailyLevel;
@@ -25,36 +25,102 @@ export interface DailySnapshot {
   trialConversions: { converted: number; decided: number };
 }
 
-const DAILY_QUERY = { period: 'yesterday', interval: 'day' };
-
-function level(metric: MetricResponse): DailyLevel {
-  return {
-    value: metric.value,
-    change: metric.comparison?.change ?? 0,
-  };
+export interface DailyReportSlot {
+  reportDate: string;
+  start: Date;
+  end: Date;
 }
 
-function calendarDate(instant: string, timeZone: string): string {
-  const wall = wallClockIn(new Date(instant), timeZone);
+function ymd(instant: Date, timeZone: string): string {
+  const wall = wallClockIn(instant, timeZone);
   return [wall.year, wall.month, wall.day]
     .map((part, index) => (index === 0 ? String(part) : String(part).padStart(2, '0')))
     .join('-');
 }
 
+function startOfDay(instant: Date, timeZone: string): Date {
+  const wall = wallClockIn(instant, timeZone);
+  return instantFromWallClock({ ...wall, hour: 0, minute: 0, second: 0 }, timeZone);
+}
+
+/**
+ * Which Israel-local (by default) day the digest is for, and the half-open
+ * window metrics should read.
+ *
+ * From 18:00 local onward that is *today*, as-of now, so an evening send is a
+ * wrap of the day that is ending. Before 18:00 it is yesterday, cut at 18:00,
+ * so a sync that missed last night still has one message to catch up and does
+ * not invent a morning report of a day that has not closed.
+ */
+export function dueDailyReport(
+  now: Date,
+  options: { timeZone?: string; hour?: number } = {},
+): DailyReportSlot {
+  const { runtime } = getConfig();
+  const timeZone = options.timeZone ?? runtime.dailyReportTimeZone;
+  const hour = options.hour ?? runtime.dailyReportHour;
+  const wall = wallClockIn(now, timeZone);
+  const todayStart = startOfDay(now, timeZone);
+
+  if (wall.hour >= hour) {
+    return { reportDate: ymd(now, timeZone), start: todayStart, end: now };
+  }
+
+  const yesterdayStart = addInterval(todayStart, 'day', -1, timeZone);
+  const yesterdayWall = wallClockIn(yesterdayStart, timeZone);
+  const yesterdayClose = instantFromWallClock(
+    { ...yesterdayWall, hour, minute: 0, second: 0 },
+    timeZone,
+  );
+  return {
+    reportDate: ymd(yesterdayStart, timeZone),
+    start: yesterdayStart,
+    end: yesterdayClose,
+  };
+}
+
+function customQuery(start: Date, end: Date) {
+  return {
+    period: 'custom',
+    start: start.toISOString(),
+    end: end.toISOString(),
+    interval: 'day',
+  };
+}
+
+function round(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function level(current: MetricResponse, previous: MetricResponse): DailyLevel {
+  return {
+    value: current.value,
+    change: round(current.value - previous.value),
+  };
+}
+
 export function collectDailySnapshot(db: Db, now: Date): DailySnapshot {
-  const options = { now };
-  const mrr = runMetric('mrr', DAILY_QUERY, options);
-  const activeUsers = runMetric('active_installs', DAILY_QUERY, options);
-  const activeSubscriptions = runMetric('active_subscriptions', DAILY_QUERY, options);
-  const grossPayments = runMetric('gross_earnings', DAILY_QUERY, options);
-  const arpu = runMetric('arpu', DAILY_QUERY, options);
-  const reportDate = calendarDate(mrr.periodStart, getConfig().runtime.timezone);
+  const slot = dueDailyReport(now);
+  const previousStart = addInterval(slot.start, 'day', -1, getConfig().runtime.dailyReportTimeZone);
+  const previousEnd = addInterval(slot.end, 'day', -1, getConfig().runtime.dailyReportTimeZone);
+
+  const currentQuery = customQuery(slot.start, slot.end);
+  const previousQuery = customQuery(previousStart, previousEnd);
+  const currentOpts = { now };
+  const previousOpts = { now: previousEnd };
+
+  const metric = (key: string, query: ReturnType<typeof customQuery>, options: { now: Date }) =>
+    runMetric(key, query, options);
+
+  const mrr = metric('mrr', currentQuery, currentOpts);
+  const activeUsers = metric('active_installs', currentQuery, currentOpts);
+  const activeSubscriptions = metric('active_subscriptions', currentQuery, currentOpts);
+  const grossPayments = metric('gross_earnings', currentQuery, currentOpts);
+  const arpu = metric('arpu', currentQuery, currentOpts);
 
   const appIds = resolveScopedAppIds(db);
   const appFilter =
-    appIds.length === 0
-      ? ''
-      : `AND app_id IN (${appIds.map(() => '?').join(', ')})`;
+    appIds.length === 0 ? '' : `AND app_id IN (${appIds.map(() => '?').join(', ')})`;
 
   const decisions = db
     .prepare(
@@ -68,19 +134,25 @@ export function collectDailySnapshot(db: Db, now: Date): DailySnapshot {
          AND type IN ('trial_converted', 'trial_abandoned', 'trial_expired')
          ${appFilter}`,
     )
-    .get(mrr.periodStart, mrr.periodEnd, ...appIds) as {
+    .get(slot.start.toISOString(), slot.end.toISOString(), ...appIds) as {
       converted: number | null;
       decided: number;
     };
 
   return {
-    reportDate,
+    reportDate: slot.reportDate,
     currency: mrr.currency,
-    mrr: level(mrr),
-    activeUsers: level(activeUsers),
-    activeSubscriptions: level(activeSubscriptions),
-    grossPayments: level(grossPayments),
-    arpu: level(arpu),
+    mrr: level(mrr, metric('mrr', previousQuery, previousOpts)),
+    activeUsers: level(activeUsers, metric('active_installs', previousQuery, previousOpts)),
+    activeSubscriptions: level(
+      activeSubscriptions,
+      metric('active_subscriptions', previousQuery, previousOpts),
+    ),
+    grossPayments: level(
+      grossPayments,
+      metric('gross_earnings', previousQuery, previousOpts),
+    ),
+    arpu: level(arpu, metric('arpu', previousQuery, previousOpts)),
     trialConversions: {
       converted: decisions.converted ?? 0,
       decided: decisions.decided,

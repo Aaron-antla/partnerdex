@@ -73,7 +73,7 @@ export const DAILY_REPORT: NotificationTopic = {
   key: 'daily_report',
   label: 'Daily report',
   description:
-    "Once a day, yesterday's MRR, active users, payments, and trial conversions.",
+    "Each day at 18:00 Israel time, that day's MRR, active users, payments, and trial conversions.",
   kind: 'digest',
   eventTypes: [],
   covers: [

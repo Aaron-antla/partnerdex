@@ -325,7 +325,7 @@ export function Notifications() {
           {/* Event watermarks are easy to mistake for a broken toggle when a
               newly enabled channel stays quiet. */}
           Event toggles take effect from the moment you switch them on; history is never replayed.
-          The daily report sends the latest complete day. Every message is sent at most once per
+          The daily report goes out at 18:00 Israel time. Every message is sent at most once per
           channel.
         </p>
       ) : null}
