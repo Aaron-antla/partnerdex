@@ -73,7 +73,7 @@ export const DAILY_REPORT: NotificationTopic = {
   key: 'daily_report',
   label: 'Daily report',
   description:
-    "Once a day, the previous day's MRR, installs, payments, and trial conversions.",
+    "Once a day, yesterday's MRR, active users, payments, and trial conversions.",
   kind: 'digest',
   eventTypes: [],
   covers: [

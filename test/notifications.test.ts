@@ -626,7 +626,10 @@ describe('daily report', () => {
         installs: [
           { shopId: '1', at: '2024-03-01T00:00:00Z' },
           { shopId: '2', at: '2024-03-01T00:00:00Z' },
-          { shopId: '3', at: '2024-03-02T00:00:00Z' },
+          // Noon, not midnight: an install stamped at 2024-03-02T00:00:00Z is
+          // live as-of that instant, so it would already count in March 1's
+          // stock and the user count would not move.
+          { shopId: '3', at: '2024-03-02T12:00:00Z' },
         ],
       },
     );
@@ -639,9 +642,10 @@ describe('daily report', () => {
       sent[0]!.blocks[1] as { fields: Array<{ type: 'mrkdwn'; text: string }> }
     ).fields.map((item) => item.text);
     assert.equal(fields[0], '*MRR*\n$77.99 | ↑ $19.99');
-    assert.match(fields[1]!, /^\*Active users\*\n3 \|/);
+    assert.equal(fields[1], '*Active users*\n3 | ↑ 1');
     assert.equal(fields[2], '*Active subscriptions*\n3 | ↑ 1');
-    assert.match(fields[3]!, /^\*Gross payments\*\n\$19\.99 \|/);
+    assert.equal(fields[3], '*Gross payments*\n$19.99 | ↓ $38.01');
+    assert.equal(fields[5], '*ARPU*\n$26.00 | ↓ $3.00');
   });
 
   it('counts trial decisions that occurred on the report day', async () => {
