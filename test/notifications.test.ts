@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { closeDb, getDb, type Db } from '../src/db/index.js';
+import {
+  buildDailyReportMessage,
+  dueDailyReport,
+  type DailySnapshot,
+} from '../src/notifications/dailyReport.js';
 import { dispatchPending } from '../src/notifications/dispatch.js';
 import { buildMessage } from '../src/notifications/slack.js';
 import {
@@ -13,7 +18,16 @@ import {
   setTopic,
   webhookHint,
 } from '../src/notifications/store.js';
-import { APP_DOWNGRADE_EVENTS, APP_INSTALL_EVENTS, APP_REVIEW_EVENTS, APP_SUBSCRIPTION_EVENTS, APP_UNINSTALL_EVENTS, APP_UPGRADE_EVENTS, LEGACY_APP_SUBSCRIPTION_TOPIC } from '../src/notifications/topics.js';
+import {
+  APP_DOWNGRADE_EVENTS,
+  APP_INSTALL_EVENTS,
+  APP_REVIEW_EVENTS,
+  APP_SUBSCRIPTION_EVENTS,
+  APP_UNINSTALL_EVENTS,
+  APP_UPGRADE_EVENTS,
+  DAILY_REPORT,
+  LEGACY_APP_SUBSCRIPTION_TOPIC,
+} from '../src/notifications/topics.js';
 import { APP_ID, resetEnvironment, seed, seedForApp } from './helpers.js';
 
 /**
@@ -479,6 +493,260 @@ describe('saying it exactly once', () => {
     stubFetch(ok);
 
     assert.equal((await dispatchPending(db)).sent, 2);
+  });
+});
+
+describe('daily report', () => {
+  it('is yesterday in Israel before 18:00, and today from 18:00', () => {
+    resetEnvironment();
+    // March 2024 is IST (UTC+2). 15:59 UTC is 17:59 in Jerusalem.
+    assert.equal(dueDailyReport(new Date('2024-03-03T15:59:00Z')).reportDate, '2024-03-02');
+    assert.equal(dueDailyReport(new Date('2024-03-03T16:00:00Z')).reportDate, '2024-03-03');
+    // After the spring-forward, 18:00 IDT is 15:00 UTC.
+    assert.equal(dueDailyReport(new Date('2024-04-10T14:59:00Z')).reportDate, '2024-04-09');
+    assert.equal(dueDailyReport(new Date('2024-04-10T15:00:00Z')).reportDate, '2024-04-10');
+  });
+
+  it('renders the expected Block Kit fields in order', () => {
+    const snapshot: DailySnapshot = {
+      reportDate: '2026-07-18',
+      currency: 'USD',
+      mrr: { value: 19699.71, change: 19.99 },
+      activeUsers: { value: 478, change: 0 },
+      activeSubscriptions: { value: 139, change: 1 },
+      grossPayments: { value: 559.94, change: 356.67 },
+      trialConversions: { converted: 1, decided: 1 },
+      arpu: { value: 141.72, change: -0.88 },
+    };
+
+    const message = buildDailyReportMessage(snapshot);
+    const blocks = message.blocks as Array<{
+      text?: { text: string };
+      fields?: Array<{ text: string }>;
+    }>;
+
+    assert.equal(message.text, 'Daily report for July 18, 2026');
+    assert.equal(blocks[0]!.text!.text, ':printer: *Daily report for July 18, 2026*');
+    assert.deepEqual(
+      blocks[1]!.fields!.map((item) => item.text),
+      [
+        '*MRR*\n$19,699.71 | ↑ $19.99',
+        '*Active users*\n478 | ≡ No change',
+        '*Active subscriptions*\n139 | ↑ 1',
+        '*Gross payments*\n$559.94 | ↑ $356.67',
+        '*Trial conversions*\n1/1 = 100.00%',
+        '*ARPU*\n$141.72 | ↓ $0.88',
+      ],
+    );
+    assert.equal(JSON.stringify(message).includes('**'), false);
+  });
+
+  it('sends yesterday once', async () => {
+    const db = seed([
+      {
+        chargeRef: 'c1',
+        shopId: '1',
+        amount: 29,
+        activatedAt: '2024-03-01T00:00:00Z',
+        firstSaleAt: '2024-03-01T00:00:00Z',
+      },
+    ]);
+    channelWithTopic(db, '#daily', DAILY_REPORT.key);
+    stubFetch(ok);
+    const now = new Date('2024-03-03T12:00:00Z');
+
+    assert.equal((await dispatchPending(db, { now })).sent, 1);
+    assert.equal(sent[0]!.text, 'Daily report for March 2, 2024');
+    assert.equal((await dispatchPending(db, { now })).sent, 0);
+    assert.equal(sent.length, 1);
+  });
+
+  it('uses a new delivery id on the next day', async () => {
+    const db = seed([
+      {
+        chargeRef: 'c1',
+        shopId: '1',
+        amount: 29,
+        activatedAt: '2024-03-01T00:00:00Z',
+        firstSaleAt: '2024-03-01T00:00:00Z',
+      },
+    ]);
+    channelWithTopic(db, '#daily', DAILY_REPORT.key);
+    stubFetch(ok);
+
+    assert.equal(
+      (await dispatchPending(db, { now: new Date('2024-03-03T16:00:00Z') })).sent,
+      1,
+    );
+    assert.equal(
+      (await dispatchPending(db, { now: new Date('2024-03-04T16:00:00Z') })).sent,
+      1,
+    );
+    assert.deepEqual(
+      sent.map((message) => message.text),
+      ['Daily report for March 3, 2024', 'Daily report for March 4, 2024'],
+    );
+  });
+
+  it('is off by default', async () => {
+    const db = seed([
+      {
+        chargeRef: 'c1',
+        shopId: '1',
+        amount: 29,
+        activatedAt: '2024-03-01T00:00:00Z',
+        firstSaleAt: '2024-03-01T00:00:00Z',
+      },
+    ]);
+    const channelId = channelWithTopic(db);
+    watermark(db, channelId, '2024-01-01T00:00:00Z');
+    stubFetch(ok);
+
+    await dispatchPending(db, { now: new Date('2024-03-03T12:00:00Z') });
+
+    assert.equal(sent.some((message) => message.text.includes('Daily report')), false);
+    assert.equal(sent.length, 1);
+  });
+
+  it('uses the metric values and previous-day changes', async () => {
+    const db = seed(
+      [
+        {
+          chargeRef: 'c1',
+          shopId: '1',
+          amount: 29,
+          activatedAt: '2024-03-01T00:00:00Z',
+          firstSaleAt: '2024-03-01T00:00:00Z',
+        },
+        {
+          chargeRef: 'c2',
+          shopId: '2',
+          amount: 29,
+          activatedAt: '2024-03-01T00:00:00Z',
+          firstSaleAt: '2024-03-01T00:00:00Z',
+        },
+        {
+          chargeRef: 'c3',
+          shopId: '3',
+          amount: 19.99,
+          activatedAt: '2024-03-02T00:00:00Z',
+          firstSaleAt: '2024-03-02T00:00:00Z',
+        },
+      ],
+      {
+        installs: [
+          { shopId: '1', at: '2024-03-01T00:00:00Z' },
+          { shopId: '2', at: '2024-03-01T00:00:00Z' },
+          // Noon, not midnight: an install stamped at 2024-03-02T00:00:00Z is
+          // live as-of that instant, so it would already count in March 1's
+          // stock and the user count would not move.
+          { shopId: '3', at: '2024-03-02T12:00:00Z' },
+        ],
+      },
+    );
+    channelWithTopic(db, '#daily', DAILY_REPORT.key);
+    stubFetch(ok);
+
+    await dispatchPending(db, { now: new Date('2024-03-03T12:00:00Z') });
+
+    const fields = (
+      sent[0]!.blocks[1] as { fields: Array<{ type: 'mrkdwn'; text: string }> }
+    ).fields.map((item) => item.text);
+    assert.equal(fields[0], '*MRR*\n$77.99 | ↑ $19.99');
+    assert.equal(fields[1], '*Active users*\n3 | ↑ 1');
+    assert.equal(fields[2], '*Active subscriptions*\n3 | ↑ 1');
+    assert.equal(fields[3], '*Gross payments*\n$19.99 | ↓ $38.01');
+    assert.equal(fields[5], '*ARPU*\n$26.00 | ↓ $3.00');
+  });
+
+  it('counts trial decisions that occurred on the report day', async () => {
+    const db = seed([
+      {
+        chargeRef: 'trial',
+        shopId: '1',
+        amount: 29,
+        activatedAt: '2024-02-20T00:00:00Z',
+        billingOn: '2024-03-02T00:00:00Z',
+        firstSaleAt: '2024-03-02T00:00:00Z',
+      },
+    ]);
+    channelWithTopic(db, '#daily', DAILY_REPORT.key);
+    stubFetch(ok);
+
+    await dispatchPending(db, { now: new Date('2024-03-03T12:00:00Z') });
+
+    const fields = (
+      sent[0]!.blocks[1] as { fields: Array<{ type: 'mrkdwn'; text: string }> }
+    ).fields.map((item) => item.text);
+    assert.equal(fields[4], '*Trial conversions*\n1/1 = 100.00%');
+  });
+
+  it('sends the same day to two channels', async () => {
+    const db = seed([
+      {
+        chargeRef: 'c1',
+        shopId: '1',
+        amount: 29,
+        activatedAt: '2024-03-01T00:00:00Z',
+        firstSaleAt: '2024-03-01T00:00:00Z',
+      },
+    ]);
+    channelWithTopic(db, '#daily', DAILY_REPORT.key);
+    channelWithTopic(db, '#founders', DAILY_REPORT.key);
+    stubFetch(ok);
+
+    const summary = await dispatchPending(db, { now: new Date('2024-03-03T12:00:00Z') });
+
+    assert.equal(summary.sent, 2);
+    assert.equal(sent.length, 2);
+    assert.ok(sent.every((message) => message.text === 'Daily report for March 2, 2024'));
+  });
+
+  it('sends today once 18:00 Israel time has passed', async () => {
+    const db = seed([
+      {
+        chargeRef: 'c1',
+        shopId: '1',
+        amount: 29,
+        activatedAt: '2024-03-01T00:00:00Z',
+        firstSaleAt: '2024-03-01T00:00:00Z',
+      },
+    ]);
+    channelWithTopic(db, '#daily', DAILY_REPORT.key);
+    stubFetch(ok);
+    const now = new Date('2024-03-03T16:00:00Z');
+
+    assert.equal((await dispatchPending(db, { now })).sent, 1);
+    assert.equal(sent[0]!.text, 'Daily report for March 3, 2024');
+    assert.equal((await dispatchPending(db, { now })).sent, 0);
+    assert.equal(sent.length, 1);
+  });
+
+  it('retires the day after a permanent Slack failure', async () => {
+    const db = seed([
+      {
+        chargeRef: 'c1',
+        shopId: '1',
+        amount: 29,
+        activatedAt: '2024-03-01T00:00:00Z',
+        firstSaleAt: '2024-03-01T00:00:00Z',
+      },
+    ]);
+    const channelId = channelWithTopic(db, '#daily', DAILY_REPORT.key);
+    stubFetch(() => new Response('no_service', { status: 404 }));
+    const now = new Date('2024-03-03T12:00:00Z');
+
+    assert.equal((await dispatchPending(db, { now })).retired, 1);
+    const delivery = db
+      .prepare(
+        `SELECT ok FROM notification_deliveries
+         WHERE channel_id = ? AND event_id = 'daily_report:2024-03-02'`,
+      )
+      .get(channelId) as { ok: number };
+    assert.equal(delivery.ok, 0);
+
+    assert.equal((await dispatchPending(db, { now })).sent, 0);
+    assert.equal(sent.length, 1);
   });
 });
 
