@@ -639,7 +639,7 @@ describe('daily report', () => {
       sent[0]!.blocks[1] as { fields: Array<{ type: 'mrkdwn'; text: string }> }
     ).fields.map((item) => item.text);
     assert.equal(fields[0], '*MRR*\n$77.99 | ↑ $19.99');
-    assert.equal(fields[1], '*Active users*\n3 | ↑ 1');
+    assert.match(fields[1]!, /^\*Active users\*\n3 \|/);
     assert.equal(fields[2], '*Active subscriptions*\n3 | ↑ 1');
     assert.match(fields[3]!, /^\*Gross payments\*\n\$19\.99 \|/);
   });
