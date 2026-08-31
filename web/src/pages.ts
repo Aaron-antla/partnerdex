@@ -6,7 +6,7 @@
  * dashboard knows about. Adding a card to a page is a one-line change here.
  */
 
-export type PlotKind = 'line' | 'bar' | 'area';
+export type PlotKind = 'line' | 'bar' | 'area' | 'table';
 
 export interface CardSpec {
   /** Key into the overview response, and the metric the server computes. */
@@ -183,6 +183,14 @@ const REVENUE: PageSpec = {
       tone: 'growth',
     },
     {
+      metric: 'mrr_movement',
+      label: 'MRR movement',
+      subtitle: 'New, frozen, churned, upgraded, downgraded, and net.',
+      plot: 'table',
+      breakdown: true,
+      full: true,
+    },
+    {
       metric: 'arpu',
       label: 'ARPU',
       subtitle: 'MRR over the paying population.',
@@ -236,6 +244,13 @@ const SUBSCRIPTIONS: PageSpec = {
       label: 'On trial',
       subtitle: 'Inside the free period at each point.',
       plot: 'line',
+    },
+    {
+      metric: 'trialing',
+      label: 'Trialing',
+      subtitle: 'Current trial value on each expected end date.',
+      plot: 'bar',
+      tone: 'growth',
     },
     {
       metric: 'trial_conversion_rate',
