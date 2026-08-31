@@ -237,7 +237,7 @@ The service-account key is stored in the local database and is never sent back t
 
 ### Slack Notifications
 Configure an incoming Slack webhook under **Settings → Slack**. Pick the channel in Slack when you create the webhook, then paste the URL here.
-- **Daily report:** Yesterday's MRR, active users, active subscriptions, gross payments, trial conversions, and ARPU.
+- **Daily report:** Each day at 18:00 Israel time (`Asia/Jerusalem`), that day's MRR, active users, active subscriptions, gross payments, trial conversions, and ARPU. Override with `DAILY_REPORT_HOUR` and `DAILY_REPORT_TIMEZONE`.
 - **Installs, upgrades, downgrades, uninstalls:** Independent toggles. An install message includes the plan when they signed up in the same moment.
 - **Other subscription events:** Trials, freezes, a first paid start, and a subscription cancelled while the app is still installed.
 - **Reviews:** New reviews, updated ratings, and removals.

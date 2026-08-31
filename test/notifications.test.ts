@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { closeDb, getDb, type Db } from '../src/db/index.js';
 import {
   buildDailyReportMessage,
+  dueDailyReport,
   type DailySnapshot,
 } from '../src/notifications/dailyReport.js';
 import { dispatchPending } from '../src/notifications/dispatch.js';
@@ -496,6 +497,16 @@ describe('saying it exactly once', () => {
 });
 
 describe('daily report', () => {
+  it('is yesterday in Israel before 18:00, and today from 18:00', () => {
+    resetEnvironment();
+    // March 2024 is IST (UTC+2). 15:59 UTC is 17:59 in Jerusalem.
+    assert.equal(dueDailyReport(new Date('2024-03-03T15:59:00Z')).reportDate, '2024-03-02');
+    assert.equal(dueDailyReport(new Date('2024-03-03T16:00:00Z')).reportDate, '2024-03-03');
+    // After the spring-forward, 18:00 IDT is 15:00 UTC.
+    assert.equal(dueDailyReport(new Date('2024-04-10T14:59:00Z')).reportDate, '2024-04-09');
+    assert.equal(dueDailyReport(new Date('2024-04-10T15:00:00Z')).reportDate, '2024-04-10');
+  });
+
   it('renders the expected Block Kit fields in order', () => {
     const snapshot: DailySnapshot = {
       reportDate: '2026-07-18',
@@ -564,16 +575,16 @@ describe('daily report', () => {
     stubFetch(ok);
 
     assert.equal(
-      (await dispatchPending(db, { now: new Date('2024-03-03T12:00:00Z') })).sent,
+      (await dispatchPending(db, { now: new Date('2024-03-03T16:00:00Z') })).sent,
       1,
     );
     assert.equal(
-      (await dispatchPending(db, { now: new Date('2024-03-04T12:00:00Z') })).sent,
+      (await dispatchPending(db, { now: new Date('2024-03-04T16:00:00Z') })).sent,
       1,
     );
     assert.deepEqual(
       sent.map((message) => message.text),
-      ['Daily report for March 2, 2024', 'Daily report for March 3, 2024'],
+      ['Daily report for March 3, 2024', 'Daily report for March 4, 2024'],
     );
   });
 
@@ -691,8 +702,7 @@ describe('daily report', () => {
     assert.ok(sent.every((message) => message.text === 'Daily report for March 2, 2024'));
   });
 
-  it('names yesterday in the reporting timezone, not UTC', async () => {
-    resetEnvironment({ REPORTING_TIMEZONE: 'America/New_York' });
+  it('sends today once 18:00 Israel time has passed', async () => {
     const db = seed([
       {
         chargeRef: 'c1',
@@ -704,11 +714,12 @@ describe('daily report', () => {
     ]);
     channelWithTopic(db, '#daily', DAILY_REPORT.key);
     stubFetch(ok);
+    const now = new Date('2024-03-03T16:00:00Z');
 
-    // 04:00 UTC is still 23:00 on March 2 in New York, so yesterday there is March 1.
-    await dispatchPending(db, { now: new Date('2024-03-03T04:00:00Z') });
-
-    assert.equal(sent[0]!.text, 'Daily report for March 1, 2024');
+    assert.equal((await dispatchPending(db, { now })).sent, 1);
+    assert.equal(sent[0]!.text, 'Daily report for March 3, 2024');
+    assert.equal((await dispatchPending(db, { now })).sent, 0);
+    assert.equal(sent.length, 1);
   });
 
   it('retires the day after a permanent Slack failure', async () => {

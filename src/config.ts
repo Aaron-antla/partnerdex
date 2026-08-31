@@ -43,6 +43,14 @@ function nonNegative(name: string, fallback: number): number {
   return value;
 }
 
+function hourOfDay(name: string, fallback: number): number {
+  const value = int(name, fallback);
+  if (value < 0 || value > 23) {
+    throw new ConfigError(`${name} must be an hour from 0 to 23, got "${value}".`);
+  }
+  return value;
+}
+
 /**
  * App ids may be given as bare numbers or full gids. Everything downstream
  * stores and compares the numeric portion, so normalize on the way in.
@@ -217,6 +225,13 @@ export interface Config {
      */
     notificationMaxAgeHours: number;
     /**
+     * Local hour (0-23) in `dailyReportTimeZone` after which the daily Slack
+     * digest may send today's snapshot. Before that hour, dispatch will only
+     * catch up yesterday if it was missed.
+     */
+    dailyReportHour: number;
+    dailyReportTimeZone: string;
+    /**
      * Whether a reverse proxy terminates TLS in front of this process.
      *
      * Off by default because it is only safe when something really is in front:
@@ -263,6 +278,8 @@ export function getConfig(): Config {
       syncIntervalMinutes: nonNegative('SYNC_INTERVAL_MINUTES', 5),
       reviewSweepHours: nonNegative('REVIEW_SWEEP_HOURS', 24),
       notificationMaxAgeHours: nonNegative('NOTIFICATION_MAX_AGE_HOURS', 24),
+      dailyReportHour: hourOfDay('DAILY_REPORT_HOUR', 18),
+      dailyReportTimeZone: timezone('DAILY_REPORT_TIMEZONE', 'Asia/Jerusalem'),
       trustProxy: bool('TRUST_PROXY', false),
     },
     reporting: {
