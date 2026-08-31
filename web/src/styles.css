@@ -914,6 +914,24 @@ h3,
 
 /* ----------------------------------------------------------- table view */
 
+/*
+ * Global `table` rules below still own the customers and funnel lists. The
+ * metric ledger uses the shadcn Table primitive, so those defaults would
+ * right-align Period, uppercase the heads, and fight the token-coloured cells.
+ */
+[data-slot='table-container'] table,
+[data-slot='table-container'] th,
+[data-slot='table-container'] td {
+  border: 0;
+  text-align: inherit;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+  padding: unset;
+}
+
 .table-wrap {
   overflow-x: auto;
   margin-bottom: 12px;

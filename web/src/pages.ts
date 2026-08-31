@@ -250,6 +250,7 @@ const SUBSCRIPTIONS: PageSpec = {
       label: 'Trialing',
       subtitle: 'Current trial value on each expected end date.',
       plot: 'bar',
+      tone: 'growth',
     },
     {
       metric: 'trial_conversion_rate',

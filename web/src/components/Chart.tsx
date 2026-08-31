@@ -13,6 +13,15 @@ import {
 import type { MetricFormat } from '../api';
 import { formatBucketDate, formatFullDate, formatValue } from '../format';
 import { ChartContainer, ChartTooltip, type ChartConfig } from '@/components/ui/chart';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { cn } from '@/lib/utils';
 
 /**
  * The plot primitives every card draws with.
@@ -36,6 +45,12 @@ export interface ChartSeries {
 
 export type ChartDatum = { date: string } & Record<string, number | string>;
 
+function ledgerTone(value: number): string | undefined {
+  if (value > 0) return 'var(--delta-up)';
+  if (value < 0) return 'var(--delta-down)';
+  return undefined;
+}
+
 export function DataTable({
   series,
   data,
@@ -50,32 +65,54 @@ export function DataTable({
   interval: string;
 }) {
   return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">Period</th>
-            {series.map((item) => (
-              <th scope="col" key={item.key}>
-                {item.name}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {data.map((row) => (
-            <tr key={row.date}>
-              <th scope="row">{formatBucketDate(row.date, interval)}</th>
-              {series.map((item) => (
-                <td key={item.key}>
-                  {formatValue(Number(row[item.key] ?? 0), format, currency)}
-                </td>
-              ))}
-            </tr>
+    <Table className="metric-ledger">
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          <TableHead scope="col" className="sticky left-0 z-10 bg-[var(--surface-1)]">
+            Period
+          </TableHead>
+          {series.map((item) => (
+            <TableHead
+              scope="col"
+              key={item.key}
+              className={cn(
+                'text-right',
+                item.key === 'net' &&
+                  'border-l border-[var(--border)] font-semibold text-[var(--text-primary)]',
+              )}
+            >
+              {item.name}
+            </TableHead>
           ))}
-        </tbody>
-      </table>
-    </div>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {data.map((row) => (
+          <TableRow key={row.date}>
+            <TableCell className="sticky left-0 z-10 bg-[var(--surface-1)] font-medium text-[var(--text-primary)]">
+              {formatBucketDate(row.date, interval)}
+            </TableCell>
+            {series.map((item) => {
+              const value = Number(row[item.key] ?? 0);
+              const isNet = item.key === 'net';
+              return (
+                <TableCell
+                  key={item.key}
+                  className={cn(
+                    'text-right tabular-nums',
+                    isNet && 'border-l border-[var(--border)] font-semibold',
+                    value === 0 && 'text-[var(--muted)]',
+                  )}
+                  style={value === 0 ? undefined : { color: ledgerTone(value) }}
+                >
+                  {formatValue(value, format, currency)}
+                </TableCell>
+              );
+            })}
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }
 
