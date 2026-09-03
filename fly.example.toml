@@ -45,7 +45,6 @@ primary_region = "<your-region>"
   TRIAL_MIN_GAP_DAYS = "2"
   CHURN_WINDOW_DAYS = "30"
   CHURN_ON_UNINSTALL = "true"
-  PLAN_CHANGE_WINDOW_DAYS = "2"
   CACHE_TTL_SECONDS = "600"
 
   # --- Credentials ---------------------------------------------------------

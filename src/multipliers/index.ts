@@ -9,6 +9,7 @@ import {
 import { currencyProfile } from '../metrics/context.js';
 import type { Bucket } from '../metrics/time.js';
 import { isExcluded, readConnection, readSettings, type MultiplierSettings } from '../mixpanel/connection.js';
+import { PLAN_CHANGE_WINDOW_SECONDS } from '../sync/derive.js';
 import { resolveScopedAppIds } from '../sync/index.js';
 
 /**
@@ -307,10 +308,9 @@ function overallCeilings(
   now: Date,
   byShop: boolean,
 ): { overall: Omit<Ceiling, 'paidMrr' | 'generationsPerShop' | 'profitPerShop'>; history: MultipliersReport['ceiling']['history']; baseMrr: number } {
-  const { reporting } = getConfig();
   const span = CEILING_HISTORY + CEILING_MONTHS - 1;
   const buckets = monthlyBuckets(now, span);
-  const added = newSubscriptionSeries(db, buckets, options, byShop, reporting.planChangeWindowDays);
+  const added = newSubscriptionSeries(db, buckets, options, byShop);
   const churn = churnSeries(db, buckets, options, WINDOW_DAYS, byShop);
   const byIdx = new Map(churn.map((point) => [point.idx, point]));
 
@@ -456,7 +456,6 @@ function tierCeilings(db: Db, options: AsOfOptions, now: Date): Map<string, Omit
   // another, a price edit on the same plan — is neither a loss nor a gain for
   // that tier. Pair each plan-change cancel with its replacement the way the
   // derive step does, and drop both halves when the tier did not change.
-  const windowMs = getConfig().reporting.planChangeWindowDays * MS_PER_DAY;
   const skipIn = new Set<string>();
   const skipOut = new Set<string>();
   for (const old of rows) {
@@ -468,7 +467,8 @@ function tierCeilings(db: Db, options: AsOfOptions, now: Date): Map<string, Omit
         row.appId === old.appId &&
         row.shopId === old.shopId &&
         row.activatedAt !== null &&
-        Math.abs(new Date(row.activatedAt).getTime() - churned) <= windowMs,
+        new Date(row.activatedAt).getTime() - churned >= 0 &&
+        new Date(row.activatedAt).getTime() - churned < PLAN_CHANGE_WINDOW_SECONDS * 1000,
     );
     if (next && tierOf(next.planName) === tierOf(old.planName)) {
       skipOut.add(old.chargeId);

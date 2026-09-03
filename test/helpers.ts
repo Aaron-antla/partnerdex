@@ -34,7 +34,6 @@ export function resetEnvironment(overrides: Record<string, string> = {}): void {
   process.env.TRIAL_MIN_GAP_DAYS = '2';
   process.env.CHURN_WINDOW_DAYS = '30';
   process.env.CHURN_ON_UNINSTALL = 'true';
-  process.env.PLAN_CHANGE_WINDOW_DAYS = '2';
   // Off by default, because every fixture in the suite is dated 2024 and would
   // otherwise be too old to announce. The cap has its own tests, which set it
   // explicitly and supply a clock.
