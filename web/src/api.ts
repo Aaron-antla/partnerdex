@@ -667,6 +667,7 @@ export interface NotificationTopic {
   key: string;
   label: string;
   description: string;
+  kind?: 'events' | 'digest';
   eventTypes: string[];
   /** What the toggle promises, in the reader's words. */
   covers: string[];

@@ -301,9 +301,9 @@ export function Notifications() {
         <div className="notice">
           <h2>No channels yet</h2>
           <p>
-            Add a Slack webhook above, then switch on installs, upgrades, downgrades, and
-            uninstalls. Notifications are sent after each sync, so they arrive within a few minutes
-            of the merchant action.
+            Add a Slack webhook above, then switch on the daily report or the merchant events you
+            want to follow. Notifications are sent after each sync, so events arrive within a few
+            minutes of the merchant action.
           </p>
         </div>
       ) : (
@@ -322,10 +322,11 @@ export function Notifications() {
 
       {settings.channels.length > 0 ? (
         <p className="footnote">
-          {/* The one thing about this page that would otherwise be learned by
-              being surprised: switching a toggle on does not send the past. */}
-          A toggle takes effect from the moment you switch it on — history is never replayed, and
-          each event is sent at most once per channel.
+          {/* Event watermarks are easy to mistake for a broken toggle when a
+              newly enabled channel stays quiet. */}
+          Event toggles take effect from the moment you switch them on; history is never replayed.
+          The daily report goes out at 18:00 Israel time. Every message is sent at most once per
+          channel.
         </p>
       ) : null}
     </>

@@ -39,6 +39,8 @@ export function resetEnvironment(overrides: Record<string, string> = {}): void {
   // otherwise be too old to announce. The cap has its own tests, which set it
   // explicitly and supply a clock.
   process.env.NOTIFICATION_MAX_AGE_HOURS = '0';
+  process.env.DAILY_REPORT_HOUR = '18';
+  process.env.DAILY_REPORT_TIMEZONE = 'Asia/Jerusalem';
   for (const [key, value] of Object.entries(overrides)) process.env[key] = value;
   resetConfig();
 }
