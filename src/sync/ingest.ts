@@ -67,7 +67,6 @@ export interface AppEventNode {
   description?: string | null;
 }
 
-/** Empty, missing, or non-string GraphQL values are stored as null. */
 function optionalText(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }

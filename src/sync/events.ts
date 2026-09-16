@@ -245,14 +245,6 @@ function withUninstallDetail(
   return Object.keys(merged).length > 0 ? JSON.stringify(merged) : null;
 }
 
-/**
- * Uninstall churn is stamped at the RELATIONSHIP_UNINSTALLED instant. A
- * SUBSCRIPTION_CHARGE_CANCELED for the same walk-away can land a second later,
- * so looking up the cancel row's timestamp misses the survey.
- *
- * A same-instant uninstall+cancel is labelled `canceled` by derive.ts (goneAt
- * is not strictly before canceled_at), so that case falls back to `eventAt`.
- */
 function surveyForLoss(
   sub: SubRow,
   uninstalls: Map<string, UninstallFeedback>,

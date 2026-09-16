@@ -154,13 +154,6 @@ export const MIGRATIONS: Migration[] = [
     },
   },
 
-  /*
-   * Uninstall survey answers live on the raw RELATIONSHIP_UNINSTALLED row.
-   *
-   * Existing databases were created with CREATE TABLE IF NOT EXISTS, so
-   * SCHEMA_SQL will not add these columns. New databases already have them
-   * from SCHEMA_SQL and this body no-ops.
-   */
   {
     version: 3,
     up: (db) => {

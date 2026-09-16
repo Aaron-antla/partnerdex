@@ -343,8 +343,6 @@ describe('what a channel is told', () => {
     assert.deepEqual(headlines(), ['Trial started', 'Trial cancelled']);
     // At the moment they left, not at the trial end date they never reached.
     assert.match(JSON.stringify(sent[1]!.blocks), /2024-03-01T01:42:53/);
-    // The cancel is one second after the uninstall. The survey still has to
-    // travel with Trial cancelled.
     const cancelled = JSON.stringify(sent[1]!.blocks);
     assert.match(cancelled, /Uninstall reason/);
     assert.match(cancelled, /OTHER/);
