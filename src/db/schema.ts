@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS app_events (
   charge_currency TEXT,
   charge_test     INTEGER NOT NULL DEFAULT 0,
   billing_on      TEXT,
+  uninstall_reason      TEXT,
+  uninstall_description TEXT,
   PRIMARY KEY (app_id, type, occurred_at, charge_id, shop_id)
 ) WITHOUT ROWID;
 

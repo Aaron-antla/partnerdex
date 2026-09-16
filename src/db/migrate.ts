@@ -153,6 +153,27 @@ export const MIGRATIONS: Migration[] = [
       db.exec('DELETE FROM metric_cache');
     },
   },
+
+  /*
+   * Uninstall survey answers live on the raw RELATIONSHIP_UNINSTALLED row.
+   *
+   * Existing databases were created with CREATE TABLE IF NOT EXISTS, so
+   * SCHEMA_SQL will not add these columns. New databases already have them
+   * from SCHEMA_SQL and this body no-ops.
+   */
+  {
+    version: 3,
+    up: (db) => {
+      const events = columns(db, 'app_events');
+      if (events.size === 0) return;
+      if (!events.has('uninstall_reason')) {
+        db.exec('ALTER TABLE app_events ADD COLUMN uninstall_reason TEXT');
+      }
+      if (!events.has('uninstall_description')) {
+        db.exec('ALTER TABLE app_events ADD COLUMN uninstall_description TEXT');
+      }
+    },
+  },
 ];
 
 export function readUserVersion(db: Db): number {

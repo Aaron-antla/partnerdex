@@ -15,6 +15,7 @@ import {
 } from '../src/notifications/store.js';
 import { APP_DOWNGRADE_EVENTS, APP_INSTALL_EVENTS, APP_REVIEW_EVENTS, APP_SUBSCRIPTION_EVENTS, APP_UNINSTALL_EVENTS, APP_UPGRADE_EVENTS, LEGACY_APP_SUBSCRIPTION_TOPIC } from '../src/notifications/topics.js';
 import { APP_ID, resetEnvironment, seed, seedForApp } from './helpers.js';
+import { APP_EVENTS_QUERY } from '../src/partner/queries.js';
 
 /**
  * What gets said, to whom, and how many times.
@@ -27,6 +28,15 @@ import { APP_ID, resetEnvironment, seed, seedForApp } from './helpers.js';
  */
 
 const TOPIC = APP_SUBSCRIPTION_EVENTS.key;
+
+describe('Partner API app events query', () => {
+  it('asks RelationshipUninstalled for reason and description', () => {
+    const fragment = APP_EVENTS_QUERY.match(/on RelationshipUninstalled\s*\{[^}]+\}/);
+    assert.ok(fragment, 'APP_EVENTS_QUERY must fragment on RelationshipUninstalled');
+    assert.match(fragment[0]!, /\breason\b/);
+    assert.match(fragment[0]!, /\bdescription\b/);
+  });
+});
 
 interface SentMessage {
   url: string;
@@ -322,7 +332,7 @@ describe('what a channel is told', () => {
           churnedAt: '2024-03-01T01:42:53Z',
         },
       ],
-      { uninstalls: [{ shopId: '1', at: '2024-03-01T01:42:52Z' }] },
+      { uninstalls: [{ shopId: '1', at: '2024-03-01T01:42:52Z', reason: 'OTHER', description: 'Did not need it' }] },
     );
     const channelId = channelWithTopic(db);
     watermark(db, channelId, '2024-01-01T00:00:00Z');
@@ -333,6 +343,12 @@ describe('what a channel is told', () => {
     assert.deepEqual(headlines(), ['Trial started', 'Trial cancelled']);
     // At the moment they left, not at the trial end date they never reached.
     assert.match(JSON.stringify(sent[1]!.blocks), /2024-03-01T01:42:53/);
+    // The cancel is one second after the uninstall. The survey still has to
+    // travel with Trial cancelled.
+    const cancelled = JSON.stringify(sent[1]!.blocks);
+    assert.match(cancelled, /Uninstall reason/);
+    assert.match(cancelled, /OTHER/);
+    assert.match(cancelled, /Did not need it/);
   });
   it('reports an upgrade as an upgrade, not as a cancellation', async () => {
     const db = seed([
@@ -557,6 +573,7 @@ describe('message rendering', () => {
     previousAmount: null,
     previousBillingInterval: null,
     trialEndsAt: null,
+    detail: null,
   };
 
   /**
@@ -676,6 +693,25 @@ describe('message rendering', () => {
     const rendered = JSON.stringify(buildMessage(base).blocks);
     assert.match(rendered, /<https:\/\/acme\.myshopify\.com\|Acme Store>/);
   });
+
+  it('renders uninstall reason and description as one field', () => {
+    const message = buildMessage({
+      ...base,
+      type: 'unsubscribed',
+      detail: { uninstallReason: 'TOO_EXPENSIVE', uninstallDescription: 'Switching to a competitor' },
+    });
+    const rendered = JSON.stringify(message.blocks);
+    assert.match(rendered, /Uninstall reason/);
+    assert.match(rendered, /TOO_EXPENSIVE/);
+    assert.match(rendered, /Switching to a competitor/);
+  });
+
+  it('omits Uninstall reason when the survey is missing', () => {
+    for (const detail of [null, {}, { uninstallReason: '', uninstallDescription: '' }]) {
+      const message = buildMessage({ ...base, type: 'unsubscribed', detail });
+      assert.equal(JSON.stringify(message.blocks).includes('Uninstall reason'), false);
+    }
+  });
 });
 
 describe('installs, upgrades, downgrades and uninstalls as separate toggles', () => {
@@ -738,6 +774,101 @@ describe('installs, upgrades, downgrades and uninstalls as separate toggles', ()
     await dispatchPending(db);
 
     assert.deepEqual(headlines(), ['App uninstalled']);
+  });
+
+  it('puts the uninstall survey on Subscription cancelled when they removed the app', async () => {
+    const db = seed(
+      [
+        {
+          chargeRef: 'c1',
+          shopId: '1',
+          amount: 29,
+          activatedAt: '2024-03-01T00:00:00Z',
+          firstSaleAt: '2024-03-01T00:00:00Z',
+          churnedAt: '2024-04-01T00:00:00Z',
+        },
+      ],
+      {
+        uninstalls: [
+          {
+            shopId: '1',
+            at: '2024-04-01T00:00:00Z',
+            reason: 'TOO_EXPENSIVE',
+            description: 'Switching to a competitor',
+          },
+        ],
+      },
+    );
+    const channelId = channelWithTopic(db);
+    watermark(db, channelId, '2024-03-15T00:00:00Z');
+    stubFetch(ok);
+
+    await dispatchPending(db);
+
+    assert.ok(headlines().includes('Subscription cancelled'));
+    const cancelled = sent.find((message) => message.text.startsWith('Subscription cancelled'));
+    assert.ok(cancelled);
+    const rendered = JSON.stringify(cancelled!.blocks);
+    assert.match(rendered, /Uninstall reason/);
+    assert.match(rendered, /TOO_EXPENSIVE/);
+    assert.match(rendered, /Switching to a competitor/);
+  });
+
+  it('puts the uninstall survey on App uninstalled for the same merchant action', async () => {
+    const db = seed(
+      [
+        {
+          chargeRef: 'c1',
+          shopId: '1',
+          amount: 29,
+          activatedAt: '2024-03-01T00:00:00Z',
+          firstSaleAt: '2024-03-01T00:00:00Z',
+          churnedAt: '2024-04-01T00:00:00Z',
+        },
+      ],
+      {
+        uninstalls: [
+          {
+            shopId: '1',
+            at: '2024-04-01T00:00:00Z',
+            reason: 'TOO_EXPENSIVE',
+            description: 'Switching to a competitor',
+          },
+        ],
+      },
+    );
+    const channelId = channelWithTopic(db, '#revenue', APP_UNINSTALL_EVENTS.key);
+    watermark(db, channelId, '2024-03-15T00:00:00Z', APP_UNINSTALL_EVENTS.key);
+    stubFetch(ok);
+
+    await dispatchPending(db);
+
+    assert.deepEqual(headlines(), ['App uninstalled']);
+    const rendered = JSON.stringify(sent[0]!.blocks);
+    assert.match(rendered, /Uninstall reason/);
+    assert.match(rendered, /TOO_EXPENSIVE/);
+    assert.match(rendered, /Switching to a competitor/);
+  });
+
+  it('does not put Uninstall reason on a cancel that keeps the app installed', async () => {
+    const db = seed([
+      {
+        chargeRef: 'c1',
+        shopId: '1',
+        amount: 29,
+        activatedAt: '2024-03-01T00:00:00Z',
+        firstSaleAt: '2024-03-01T00:00:00Z',
+        churnedAt: '2024-04-01T00:00:00Z',
+      },
+    ]);
+    const channelId = channelWithTopic(db);
+    watermark(db, channelId, '2024-03-15T00:00:00Z');
+    stubFetch(ok);
+
+    await dispatchPending(db);
+
+    assert.deepEqual(headlines(), ['Subscription cancelled']);
+    assert.equal(JSON.stringify(sent[0]!.blocks).includes('Uninstall reason'), false);
   });
 
   it('does not send an uninstall for a subscription cancel that keeps the app', async () => {

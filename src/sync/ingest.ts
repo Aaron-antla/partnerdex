@@ -46,6 +46,11 @@ export interface TransactionNode {
   shopifyFee?: MoneyNode | null;
 }
 
+export interface UninstallFeedback {
+  reason: string | null;
+  description: string | null;
+}
+
 export interface AppEventNode {
   type: string;
   occurredAt: string;
@@ -58,6 +63,23 @@ export interface AppEventNode {
     billingOn: string | null;
     amount: MoneyNode | null;
   } | null;
+  reason?: string | null;
+  description?: string | null;
+}
+
+/** Empty, missing, or non-string GraphQL values are stored as null. */
+function optionalText(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function uninstallFeedback(node: AppEventNode): UninstallFeedback {
+  if (node.type !== 'RELATIONSHIP_UNINSTALLED') {
+    return { reason: null, description: null };
+  }
+  return {
+    reason: optionalText(node.reason),
+    description: optionalText(node.description),
+  };
 }
 
 export function upsertApp(db: Db, app: AppNode): string {
@@ -138,15 +160,19 @@ export function insertAppEvents(db: Db, appId: string, nodes: AppEventNode[]): n
   const statement = db.prepare(
     `INSERT INTO app_events (
        app_id, shop_id, type, occurred_at, charge_id, charge_name,
-       charge_amount, charge_currency, charge_test, billing_on
+       charge_amount, charge_currency, charge_test, billing_on,
+       uninstall_reason, uninstall_description
      ) VALUES (
        @appId, @shopId, @type, @occurredAt, @chargeId, @chargeName,
-       @chargeAmount, @chargeCurrency, @chargeTest, @billingOn
+       @chargeAmount, @chargeCurrency, @chargeTest, @billingOn,
+       @uninstallReason, @uninstallDescription
      )
      ON CONFLICT(app_id, type, occurred_at, charge_id, shop_id) DO UPDATE SET
        charge_name = COALESCE(excluded.charge_name, app_events.charge_name),
        charge_amount = COALESCE(excluded.charge_amount, app_events.charge_amount),
-       billing_on = COALESCE(excluded.billing_on, app_events.billing_on)`,
+       billing_on = COALESCE(excluded.billing_on, app_events.billing_on),
+       uninstall_reason = COALESCE(excluded.uninstall_reason, app_events.uninstall_reason),
+       uninstall_description = COALESCE(excluded.uninstall_description, app_events.uninstall_description)`,
   );
 
   const run = db.transaction((batch: AppEventNode[]) => {
@@ -155,6 +181,7 @@ export function insertAppEvents(db: Db, appId: string, nodes: AppEventNode[]): n
       const shopId = upsertShop(db, node.shop);
       const charge = node.charge;
       const amount = money(charge?.amount);
+      const survey = uninstallFeedback(node);
 
       statement.run({
         appId,
@@ -167,6 +194,8 @@ export function insertAppEvents(db: Db, appId: string, nodes: AppEventNode[]): n
         chargeCurrency: charge ? amount.currency : null,
         chargeTest: charge?.test ? 1 : 0,
         billingOn: charge?.billingOn ? toUtcIso(charge.billingOn) : null,
+        uninstallReason: survey.reason,
+        uninstallDescription: survey.description,
       });
       written += 1;
     }
