@@ -107,6 +107,10 @@ export const APP_EVENTS_QUERY = /* GraphQL */ `
                 amount ${MONEY}
               }
             }
+            ... on RelationshipUninstalled {
+              reason
+              description
+            }
           }
         }
       }

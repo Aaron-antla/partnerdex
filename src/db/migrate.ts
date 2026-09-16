@@ -153,6 +153,20 @@ export const MIGRATIONS: Migration[] = [
       db.exec('DELETE FROM metric_cache');
     },
   },
+
+  {
+    version: 3,
+    up: (db) => {
+      const events = columns(db, 'app_events');
+      if (events.size === 0) return;
+      if (!events.has('uninstall_reason')) {
+        db.exec('ALTER TABLE app_events ADD COLUMN uninstall_reason TEXT');
+      }
+      if (!events.has('uninstall_description')) {
+        db.exec('ALTER TABLE app_events ADD COLUMN uninstall_description TEXT');
+      }
+    },
+  },
 ];
 
 export function readUserVersion(db: Db): number {

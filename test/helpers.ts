@@ -72,6 +72,8 @@ export interface SubscriptionFixture {
 export interface RelationshipEvent {
   shopId: string;
   at: string;
+  reason?: string | null;
+  description?: string | null;
 }
 
 export function seed(
@@ -174,6 +176,8 @@ export function seed(
       __typename: 'RelationshipUninstalled',
       shop: shop(uninstall.shopId),
       charge: null,
+      reason: uninstall.reason,
+      description: uninstall.description,
     });
   }
 

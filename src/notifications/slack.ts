@@ -305,6 +305,12 @@ export function buildMessage(notice: SubscriptionNotice): SlackMessage {
     field('MRR', mrrLine(notice)),
   ];
 
+  const reason = str(notice.detail?.uninstallReason);
+  const description = str(notice.detail?.uninstallDescription);
+  if (reason || description) {
+    fields.push(field('Uninstall reason', [reason, description].filter(Boolean).join('\n')));
+  }
+
   const blocks: unknown[] = [
     {
       type: 'section',

@@ -1,5 +1,6 @@
 import type { Db } from '../db/index.js';
 import { monthlyAmountFor } from './derive.js';
+import type { UninstallFeedback } from './ingest.js';
 
 /**
  * Raw feed -> clean customer lifecycle events (customer-events spec 3).
@@ -124,6 +125,8 @@ interface RawEventRow {
   charge_name: string | null;
   charge_amount: number | null;
   charge_currency: string | null;
+  uninstall_reason: string | null;
+  uninstall_description: string | null;
 }
 
 interface SubRow {
@@ -212,7 +215,50 @@ function contributionAt(sub: SubRow | undefined, at: string): number {
   return gate <= at ? sub.monthly_amount : 0;
 }
 
-function foldInstall(items: TimelineItem[], out: CleanEvent[]): void {
+function uninstallKey(appId: string, shopId: string, at: string): string {
+  return `${appId}|${shopId}|${at}`;
+}
+
+function indexUninstalls(rows: RawEventRow[]): Map<string, UninstallFeedback> {
+  const index = new Map<string, UninstallFeedback>();
+  for (const row of rows) {
+    if (row.type !== 'RELATIONSHIP_UNINSTALLED') continue;
+    index.set(uninstallKey(row.app_id, row.shop_id, row.occurred_at), {
+      reason: row.uninstall_reason,
+      description: row.uninstall_description,
+    });
+  }
+  return index;
+}
+
+function withUninstallDetail(
+  existing: Record<string, unknown> | null,
+  feedback: UninstallFeedback | null | undefined,
+): string | null {
+  const reason = feedback?.reason ?? null;
+  const description = feedback?.description ?? null;
+  const merged: Record<string, unknown> = { ...(existing ?? {}) };
+  if (reason !== null || description !== null) {
+    merged.uninstallReason = reason;
+    merged.uninstallDescription = description;
+  }
+  return Object.keys(merged).length > 0 ? JSON.stringify(merged) : null;
+}
+
+function surveyForLoss(
+  sub: SubRow,
+  uninstalls: Map<string, UninstallFeedback>,
+  eventAt: string,
+): UninstallFeedback | undefined {
+  const at = sub.churn_reason === 'uninstalled' ? (sub.churn_at ?? eventAt) : eventAt;
+  return uninstalls.get(uninstallKey(sub.app_id, sub.shop_id, at));
+}
+
+function foldInstall(
+  items: TimelineItem[],
+  out: CleanEvent[],
+  uninstalls: Map<string, UninstallFeedback>,
+): void {
   let currentState = 'none';
   /** What the install is contributing to MRR right now. */
   let currentAmount = 0;
@@ -286,7 +332,10 @@ function foldInstall(items: TimelineItem[], out: CleanEvent[]): void {
           type: 'unsubscribed',
           plan_amount: 0,
           net_change: applies ? -currentAmount : 0,
-          detail: JSON.stringify({ churnReason: sub.churn_reason }),
+          detail: withUninstallDetail(
+            { churnReason: sub.churn_reason },
+            surveyForLoss(sub, uninstalls, item.at),
+          ),
         });
         if (applies) {
           currentAmount = 0;
@@ -340,7 +389,12 @@ function foldInstall(items: TimelineItem[], out: CleanEvent[]): void {
         break;
 
       case 'RELATIONSHIP_UNINSTALLED': {
-        push('uninstalled');
+        push('uninstalled', {
+          detail: withUninstallDetail(null, {
+            reason: raw.uninstall_reason,
+            description: raw.uninstall_description,
+          }),
+        });
         currentState = 'uninstalled';
         break;
       }
@@ -411,6 +465,10 @@ function foldInstall(items: TimelineItem[], out: CleanEvent[]): void {
           push(duringTrial ? 'trial_abandoned' : 'charge_abandoned', {
             occurred_at: at,
             plan_amount: planAmount,
+            detail:
+              duringTrial && sub
+                ? withUninstallDetail(null, surveyForLoss(sub, uninstalls, at))
+                : null,
           });
           break;
         }
@@ -448,6 +506,7 @@ function foldInstall(items: TimelineItem[], out: CleanEvent[]): void {
           plan_amount: 0,
           prev_charge_id: applies ? '' : currentCharge,
           net_change: applies ? -currentAmount : 0,
+          detail: withUninstallDetail(null, surveyForLoss(sub, uninstalls, raw.occurred_at)),
         });
         if (applies) {
           currentAmount = 0;
@@ -593,11 +652,13 @@ export function buildCustomerEvents(db: Db): number {
   const raw = db
     .prepare(
       `SELECT app_id, shop_id, type, occurred_at, charge_id, charge_name,
-              charge_amount, charge_currency
+              charge_amount, charge_currency, uninstall_reason, uninstall_description
        FROM app_events
        WHERE shop_id <> '' AND charge_test = 0`,
     )
     .all() as RawEventRow[];
+
+  const uninstalls = indexUninstalls(raw);
 
   // Build one timeline per install, merging the feed with the derived
   // movements, so a single ordered fold sees every change in sequence.
@@ -629,7 +690,7 @@ export function buildCustomerEvents(db: Db): number {
       if (a.at !== b.at) return a.at < b.at ? -1 : 1;
       return (ORDER[a.kind] ?? 99) - (ORDER[b.kind] ?? 99);
     });
-    foldInstall(items, events);
+    foldInstall(items, events, uninstalls);
   }
 
   const transactions = db

@@ -250,3 +250,46 @@ describe('migration 2 — install interval opening event', () => {
     db.close();
   });
 });
+
+describe('migration 3, uninstall survey columns', () => {
+  it('adds uninstall_reason and uninstall_description when they are missing', () => {
+    const db = freshDb();
+    db.exec('DROP TABLE app_events');
+    db.exec(`
+      CREATE TABLE app_events (
+        app_id          TEXT NOT NULL,
+        shop_id         TEXT NOT NULL DEFAULT '',
+        type            TEXT NOT NULL,
+        occurred_at     TEXT NOT NULL,
+        charge_id       TEXT NOT NULL DEFAULT '',
+        charge_name     TEXT,
+        charge_amount   REAL,
+        charge_currency TEXT,
+        charge_test     INTEGER NOT NULL DEFAULT 0,
+        billing_on      TEXT,
+        PRIMARY KEY (app_id, type, occurred_at, charge_id, shop_id)
+      ) WITHOUT ROWID;
+    `);
+    db.pragma('user_version = 2');
+    assert.equal(HAS(db, 'app_events', 'uninstall_reason'), false);
+    assert.equal(HAS(db, 'app_events', 'uninstall_description'), false);
+
+    migrate(db);
+
+    assert.ok(HAS(db, 'app_events', 'uninstall_reason'));
+    assert.ok(HAS(db, 'app_events', 'uninstall_description'));
+    assert.equal(readUserVersion(db), MIGRATIONS.length);
+    db.close();
+  });
+
+  it('is a no-op when SCHEMA_SQL already created the columns', () => {
+    const db = freshDb();
+    assert.ok(HAS(db, 'app_events', 'uninstall_reason'));
+    assert.ok(HAS(db, 'app_events', 'uninstall_description'));
+    migrate(db);
+    assert.ok(HAS(db, 'app_events', 'uninstall_reason'));
+    assert.ok(HAS(db, 'app_events', 'uninstall_description'));
+    assert.equal(readUserVersion(db), MIGRATIONS.length);
+    db.close();
+  });
+});
