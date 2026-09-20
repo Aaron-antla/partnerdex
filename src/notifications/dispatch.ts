@@ -1,12 +1,17 @@
+import { getConfig } from '../config.js';
 import { getDb, type Db } from '../db/index.js';
 import { resolveScopedAppIds } from '../sync/index.js';
+import { buildDailyReportMessage, collectDailySnapshot } from './dailyReport.js';
 import { listChannels, migrateLegacySubscriptionTopics, recordDeliveryOutcome, webhookUrlFor } from './store.js';
 import { buildMessage, postToSlack, type SubscriptionNotice } from './slack.js';
-import { topicByKey } from './topics.js';
-import { getConfig } from '../config.js';
+import { DAILY_REPORT, topicByKey } from './topics.js';
 
 /**
  * Deciding what to say, and saying it exactly once.
+ *
+ * Event topics read `customer_events`. Digest topics assemble a daily snapshot
+ * at 18:00 in `DAILY_REPORT_TIMEZONE` (Israel by default). Both share the
+ * webhook, the delivery ledger, and this pass.
  *
  * The hard part is not the HTTP request. `customer_events` is dropped and
  * rewritten on every sync, so "what is new since last time" is not a question
@@ -444,7 +449,7 @@ async function dispatchChannel(
   const slices: Array<{ eventTypes: readonly string[]; enabledAt: string }> = [];
   for (const topicKey of channel.topics) {
     const topic = topicByKey(topicKey);
-    if (!topic) continue;
+    if (!topic || topic.kind !== 'events') continue;
     const enabledAt = (
       db
         .prepare(
@@ -461,37 +466,72 @@ async function dispatchChannel(
     channel.id,
     pendingFor(db, channel.id, slices, appIds, now),
   );
-  if (rows.length === 0) return;
 
   for (const { notice, eventIds } of collapse(rows)) {
-      const result = await postToSlack(url, buildMessage(notice));
+    const result = await postToSlack(url, buildMessage(notice));
 
-      if (result.ok) {
-        recordDelivery(db, channel.id, eventIds, true, null);
-        recordDeliveryOutcome(channel.id, { at: new Date().toISOString(), error: null }, db);
-        summary.sent += 1;
-        await sleep(SEND_SPACING_MS);
-        continue;
-      }
+    if (result.ok) {
+      recordDelivery(db, channel.id, eventIds, true, null);
+      recordDeliveryOutcome(channel.id, { at: new Date().toISOString(), error: null }, db);
+      summary.sent += 1;
+      await sleep(SEND_SPACING_MS);
+      continue;
+    }
 
-      recordDeliveryOutcome(channel.id, { at: new Date().toISOString(), error: result.error }, db);
+    recordDeliveryOutcome(channel.id, { at: new Date().toISOString(), error: result.error }, db);
 
-      if (result.permanent) {
-        // The webhook will refuse this message however often it is offered.
-        // Retire it and carry on, so one bad event cannot wedge the queue.
-        recordDelivery(db, channel.id, eventIds, false, result.error);
-        summary.retired += 1;
-        continue;
-      }
+    if (result.permanent) {
+      // The webhook will refuse this message however often it is offered.
+      // Retire it and carry on, so one bad event cannot wedge the queue.
+      recordDelivery(db, channel.id, eventIds, false, result.error);
+      summary.retired += 1;
+      continue;
+    }
 
-      // Transient: leave everything after this point pending and stop, so the
-      // channel's events keep arriving in the order they happened.
-      summary.deferred += 1;
-      console.warn(
-        `[partnerdex] notifications paused for "${channel.name}": ${result.error ?? 'unknown error'}`,
-      );
+    // Transient: leave everything after this point pending and stop, so the
+    // channel's events keep arriving in the order they happened.
+    summary.deferred += 1;
+    console.warn(
+      `[partnerdex] notifications paused for "${channel.name}": ${result.error ?? 'unknown error'}`,
+    );
+    if (result.error?.startsWith('Could not reach the webhook:')) {
       return;
     }
+    break;
+  }
+
+  if (!channel.topics.includes(DAILY_REPORT.key)) return;
+
+  const snapshot = collectDailySnapshot(db, now);
+  const eventId = `daily_report:${snapshot.reportDate}`;
+  const alreadyRecorded = db
+    .prepare(
+      `SELECT 1 FROM notification_deliveries
+       WHERE channel_id = ? AND event_id = ?`,
+    )
+    .get(channel.id, eventId);
+  if (alreadyRecorded) return;
+
+  const result = await postToSlack(url, buildDailyReportMessage(snapshot));
+  if (result.ok) {
+    recordDelivery(db, channel.id, [eventId], true, null);
+    recordDeliveryOutcome(channel.id, { at: new Date().toISOString(), error: null }, db);
+    summary.sent += 1;
+    await sleep(SEND_SPACING_MS);
+    return;
+  }
+
+  recordDeliveryOutcome(channel.id, { at: new Date().toISOString(), error: result.error }, db);
+  if (result.permanent) {
+    recordDelivery(db, channel.id, [eventId], false, result.error);
+    summary.retired += 1;
+    return;
+  }
+
+  summary.deferred += 1;
+  console.warn(
+    `[partnerdex] daily report paused for "${channel.name}": ${result.error ?? 'unknown error'}`,
+  );
 }
 
 let inFlight: Promise<DispatchSummary> | null = null;
