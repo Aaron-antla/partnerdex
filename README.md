@@ -81,7 +81,7 @@ npm test
 
 PartnerDex is designed to run as a single-node process on a single machine with a persistent volume for the SQLite database.
 
-For production (Express API + SQLite), refer to the detailed guide in [DEPLOY.md](DEPLOY.md).
+**Go live is a merge (or push) to `main`.** That updates Fly.io — the real product, at `https://partnerdex-antla.fly.dev` — after CI passes, and also updates the Cloudflare Worker dashboard shell. First-time Fly setup and the deploy Action are in [DEPLOY.md](DEPLOY.md).
 
 GitHub is also connected to Cloudflare Workers Builds. That host can only serve the Vite dashboard as static assets — the API and SQLite store stay on the Node process. `wrangler.jsonc` is required so deploys skip interactive autoconfig; it points assets at `dist/web`. `/api` on that Worker returns JSON 503 so the SPA does not parse itself as an API response.
 
