@@ -15,16 +15,37 @@ import { formatBucketDate, formatFullDate } from '../format';
  *
  *   - a step with no data is blank, never zero. The top two go dark on an
  *     install that has not connected BigQuery, and a dash is the honest mark.
- *   - between step 2 and step 3, browsers become shops. Said by the GA4 and
- *     Partner pills on every row and by the notes underneath, rather than by a
- *     rule across the table: the change of source is a fact about each step, and
- *     drawn as a divider it cut the funnel in two where the reader's eye most
- *     needs to carry across.
+ *   - the steps come from three stores, and the seams matter. Browsers become
+ *     shops between step 2 and step 3, and shops become reviews at step 6. Said
+ *     by the source pill on every row and by the notes underneath, rather than
+ *     by rules across the table: the change of source is a fact about each step,
+ *     and drawn as a divider it cut the funnel where the reader's eye most needs
+ *     to carry across.
  *   - conversions are step-over-step against the previous *included* step, so
  *     excluding a step re-chains the arithmetic rather than leaving a hole.
  */
 
-const STEP_STORAGE_KEY = 'partnerdex:funnel-steps';
+/*
+ * Versioned, and the version is the point. This holds the steps a reader chose
+ * to show, which means a selection saved before "Left a review" existed lists
+ * five keys and silently hides the sixth from everyone who ever opened the
+ * settings popover. Bumping the key retires those selections once, so a new step
+ * arrives visible and a reader who does not want it can switch it off again.
+ */
+const STEP_STORAGE_KEY = 'partnerdex:funnel-steps:v2';
+
+/**
+ * The pill beside a step, naming where the figure was read.
+ *
+ * One function rather than a ternary at each of the three call sites: with two
+ * sources a ternary was exhaustive, with three it silently labels the odd one
+ * out as whatever the false branch says.
+ */
+function sourceLabel(source: FunnelResponse['steps'][number]['source']): string {
+  if (source === 'bigquery') return 'GA4';
+  if (source === 'partner') return 'Partner';
+  return 'App Store';
+}
 
 /** A funnel needs two points to have a conversion at all. */
 const MIN_STEPS = 2;
@@ -49,7 +70,7 @@ function rate(value: number): string {
  * Step-over-step conversion for a chosen subset of steps.
  *
  * Recomputed here rather than taken from the response, because the response
- * describes all five steps and the reader may be looking at three. A null on
+ * describes every step and the reader may be looking at three. A null on
  * either side is unmeasurable and a zero denominator has no finite rate —
  * neither is 0%, which would read as "nobody converted".
  */
@@ -185,7 +206,7 @@ function FunnelSettings({
                 />
                 <span>{step.label}</span>
                 <span className={`pill funnel-source-${step.source}`}>
-                  {step.source === 'bigquery' ? 'GA4' : 'Partner'}
+                  {sourceLabel(step.source)}
                 </span>
               </label>
             );
@@ -265,7 +286,7 @@ function FunnelChart({
                   className="funnel-col-bar"
                   style={{
                     height: `${Math.max(height(value), value > 0 ? 1 : 0)}%`,
-                    background: `var(--funnel-${Math.min(index + 1, 5)})`,
+                    background: `var(--funnel-${Math.min(index + 1, 6)})`,
                   }}
                   title={`${step.label}: ${NUMBER.format(value)} ${step.unit}s`}
                 >
@@ -289,7 +310,7 @@ function FunnelChart({
               <div className="funnel-col-meta">
                 <span className="funnel-col-count">{count(value)}</span>
                 <span className={`pill funnel-source-${step.source}`}>
-                  {step.source === 'bigquery' ? 'GA4' : 'Partner'}
+                  {sourceLabel(step.source)}
                 </span>
               </div>
             </div>
@@ -377,7 +398,7 @@ export function Funnel({
    */
   const columns = useMemo(() => [...(data?.buckets ?? [])].reverse(), [data]);
 
-  /** Indices into the response's five steps, in order, for what is shown. */
+  /** Indices into the response's steps, in order, for what is shown. */
   const shown = useMemo(() => {
     if (!data) return [];
     const keys = included ?? data.steps.map((step) => step.key);
@@ -486,7 +507,7 @@ export function Funnel({
                       <span className="funnel-step-index">{position + 1}</span>
                       <span className="funnel-step-label">{step.label}</span>
                       <span className={`pill funnel-source-${step.source}`}>
-                        {step.source === 'bigquery' ? 'GA4' : 'Partner'}
+                        {sourceLabel(step.source)}
                       </span>
                     </th>
 
