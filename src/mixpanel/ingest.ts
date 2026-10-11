@@ -61,6 +61,14 @@ const BLOCKED_KEY = 'mixpanel:blocked';
 /** Profiles change when a shop installs; re-reading them every hour buys nothing. */
 const IDENTITY_TTL_MS = 24 * 60 * 60_000;
 
+/**
+ * Bumped whenever the way events become counts changes, so stored days counted
+ * the old way are re-read rather than left wrong until they age out. Version 2
+ * started deduplicating the raw export.
+ */
+const AGGREGATION_VERSION = '2';
+const VERSION_KEY = 'mixpanel:aggregation';
+
 /** A runaway pager is the one way this sync could spend the quota by itself. */
 const MAX_PROFILE_PAGES = 50;
 
@@ -202,6 +210,12 @@ export function aggregateExport(
   lines: Iterable<string>,
   events: Set<string>,
   identities: Map<string, string>,
+  /**
+   * Events already counted, shared across batches of one export. The raw export
+   * is not deduplicated — Mixpanel drops retried copies only at query time — so
+   * without this every resent event is billed twice.
+   */
+  seen: Set<string> = new Set(),
 ): UsageAggregate {
   const counts = new Map<string, number>();
   let generations = 0;
@@ -209,7 +223,10 @@ export function aggregateExport(
 
   for (const line of lines) {
     if (!line.trim()) continue;
-    let parsed: { event?: string; properties?: { distinct_id?: unknown; time?: unknown } };
+    let parsed: {
+      event?: string;
+      properties?: { distinct_id?: unknown; time?: unknown; $insert_id?: unknown };
+    };
     try {
       parsed = JSON.parse(line);
     } catch {
@@ -220,6 +237,14 @@ export function aggregateExport(
     if (!Number.isFinite(seconds)) continue;
 
     const distinctId = String(parsed.properties?.distinct_id ?? '');
+    // Mixpanel's own duplicate key: name, distinct id, time and insert id. An
+    // event without an insert id is never a duplicate, as in Mixpanel.
+    const insertId = parsed.properties?.$insert_id;
+    if (insertId !== undefined && insertId !== null && insertId !== '') {
+      const identity = `${parsed.event}\u0000${distinctId}\u0000${seconds}\u0000${String(insertId)}`;
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+    }
     const domain = identities.get(distinctId) ?? shopDomain(distinctId);
     generations += 1;
     if (!domain) {
@@ -271,8 +296,10 @@ async function exportUsage(
   // attached is tens of megabytes, and only two fields of each are needed.
   const lines: string[] = [];
   const total: UsageAggregate = { counts: new Map(), generations: 0, unattributed: 0 };
+  const wanted = new Set(events);
+  const seen = new Set<string>();
   const flush = () => {
-    const part = aggregateExport(lines, new Set(events), identities);
+    const part = aggregateExport(lines, wanted, identities, seen);
     for (const [key, value] of part.counts) total.counts.set(key, (total.counts.get(key) ?? 0) + value);
     total.generations += part.generations;
     total.unattributed += part.unattributed;
@@ -400,15 +427,17 @@ export async function syncUsage(
   writeSyncState(db, ATTEMPT_KEY, { syncedThrough: now.toISOString() });
 
   const { syncedThrough } = readSyncState(db, SYNC_KEY);
+  const stale = readSyncState(db, VERSION_KEY).cursor !== AGGREGATION_VERSION;
+  const full = options.full || stale;
   const to = day(now);
   const backfill = day(new Date(now.getTime() - BACKFILL_DAYS * MS_PER_DAY));
   const resume = syncedThrough
     ? day(new Date(new Date(`${syncedThrough}T00:00:00Z`).getTime() - LOOKBACK_DAYS * MS_PER_DAY))
     : backfill;
-  const from = options.full || resume < backfill ? backfill : resume;
+  const from = full || resume < backfill ? backfill : resume;
 
   try {
-    const cached = options.full ? null : cachedIdentities(db, now);
+    const cached = full ? null : cachedIdentities(db, now);
     let identities = cached;
     if (!identities) {
       options.onProgress?.('Mixpanel: reading user profiles...');
@@ -420,6 +449,7 @@ export async function syncUsage(
     if (!cached) replaceIdentities(db, identities);
     replaceUsage(db, from, to, usage.counts);
     writeSyncState(db, SYNC_KEY, { syncedThrough: to });
+    writeSyncState(db, VERSION_KEY, { cursor: AGGREGATION_VERSION });
     recordCheck(null, db);
 
     return {

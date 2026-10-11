@@ -9,6 +9,7 @@ import {
   ReferenceDot,
   ReferenceLine,
   Scatter,
+  ScatterChart,
   XAxis,
   YAxis,
 } from 'recharts';
@@ -217,7 +218,7 @@ export function Multipliers() {
     const { costPerGeneration, costPerPayingShop } = report.settings;
     return Array.from({ length: 41 }, (_, index) => {
       const x = (max * (index / 40) ** 2);
-      return { x, breakEven: x * costPerGeneration + costPerPayingShop };
+      return { x, y: x * costPerGeneration + costPerPayingShop };
     });
   }, [report, maxGenerations]);
 
@@ -373,7 +374,7 @@ export function Multipliers() {
           style={{ height: 320 }}
           initialDimension={{ width: 800, height: 320 }}
         >
-          <ComposedChart margin={{ top: 12, right: 16, bottom: 18, left: 0 }}>
+          <ScatterChart margin={{ top: 12, right: 16, bottom: 18, left: 0 }}>
             <CartesianGrid stroke="var(--grid)" vertical={false} />
             <XAxis
               dataKey="x"
@@ -398,16 +399,17 @@ export function Multipliers() {
               width={60}
               tickFormatter={(value: number) => money(value, true)}
             />
-            <ChartTooltip content={<ScatterTooltip money={money} />} />
-            <Line
+            {/* Per dot, not per x position: the break-even line shares the axis,
+                and an axis tooltip matched it instead of the dot under the cursor. */}
+            <ChartTooltip shared={false} cursor={false} content={<ScatterTooltip money={money} />} />
+            {/* Break-even as a scatter series drawn as a line with no dots. A
+                <Line> with its own data in the same chart made the tooltip
+                report the wrong shop for the dot under the cursor. */}
+            <Scatter
               data={breakEven}
-              dataKey="breakEven"
-              type="monotone"
-              stroke="var(--critical)"
-              strokeDasharray="5 4"
-              strokeWidth={1.5}
-              dot={false}
-              activeDot={false}
+              line={{ stroke: 'var(--critical)', strokeDasharray: '5 4', strokeWidth: 1.5 }}
+              shape={() => <g />}
+              legendType="none"
               isAnimationActive={false}
             />
             <Scatter data={scatter} dataKey="y" isAnimationActive={false}>
@@ -415,7 +417,7 @@ export function Multipliers() {
                 <Cell key={row.domain} fill={row.fill} fillOpacity={0.85} />
               ))}
             </Scatter>
-          </ComposedChart>
+          </ScatterChart>
         </ChartContainer>
         <div className="mx-legend">
           <span><i style={{ background: BAND_COLOR.healthy }} />Healthy margin</span>

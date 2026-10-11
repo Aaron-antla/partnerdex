@@ -123,8 +123,10 @@ describe('multipliers: Mixpanel usage', () => {
 
     const at = (days: number) => Math.floor((NOW.getTime() - days * DAY) / 1000);
     const lines = [
-      { event: 'Gemini generation', properties: { distinct_id: 'Club21-[950]', time: at(1) } },
-      { event: 'FLUX Pro generation', properties: { distinct_id: 'Club21-[950]', time: at(1) } },
+      { event: 'Gemini generation', properties: { distinct_id: 'Club21-[950]', time: at(1), $insert_id: 'g-1' } },
+      // A retried copy: the raw export keeps it, Mixpanel's reports drop it.
+      { event: 'Gemini generation', properties: { distinct_id: 'Club21-[950]', time: at(1), $insert_id: 'g-1' } },
+      { event: 'FLUX Pro generation', properties: { distinct_id: 'Club21-[950]', time: at(1), $insert_id: 'f-1' } },
       // No profile, but the distinct id is itself a shop domain.
       { event: 'Gemini generation', properties: { distinct_id: 'Direct.myshopify.com', time: at(2) } },
       // No profile and no domain: counted, but against nobody.
@@ -153,7 +155,7 @@ describe('multipliers: Mixpanel usage', () => {
 
   afterEach(() => useMixpanelFetch(null));
 
-  it('attributes generations to shops by profile domain and replaces the days it re-reads', async () => {
+  it('attributes generations to shops by profile domain, drops retried duplicates, and replaces the days it re-reads', async () => {
     // A stale row inside the re-read window must be replaced, not added to.
     replaceUsage(getDb(), day(1), day(1), new Map([[`club21.myshopify.com|${day(1)}`, 99]]));
 
