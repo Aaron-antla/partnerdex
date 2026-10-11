@@ -13,3 +13,4 @@ fly.toml
 .wrangler
 .dev.vars*
 
+.amp/portals/

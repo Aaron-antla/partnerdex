@@ -1,0 +1,13 @@
+services:
+  # Express API. Fixed port because the Vite dev server proxies /api to
+  # localhost:8787 (vite.config.ts).
+  api:
+    command: npm run dev:api
+    port: 8787
+    health: /api/health
+  web:
+    command: npm run dev:web -- --host 0.0.0.0 --port "$PORT" --strictPort
+    port: 5173
+    portal:
+      title: PartnerDex dashboard
+      description: Vite dev server; /api is proxied to the api service. Metrics read zero until data is seeded (see AGENTS.md).

@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Prepares an Amp orb for PartnerDex: Node 20 (matching CI and the Dockerfile),
+# npm dependencies from the lockfile, and a dev-only .env. Idempotent; a warm
+# rerun on a restored snapshot only re-verifies.
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+step() {
+  local name="$1"
+  shift
+  local start=$SECONDS
+  echo "==> $name"
+  "$@"
+  echo "<== $name ($((SECONDS - start))s)"
+}
+
+# The orb's default Node is newer than better-sqlite3 11 can compile against,
+# so install the Node 20 line that CI and the Docker image use.
+NODE_MAJOR=20
+NODE_HOME="$HOME/.local/node-$NODE_MAJOR"
+
+install_node() {
+  if [[ -x "$NODE_HOME/bin/node" && "$("$NODE_HOME/bin/node" -v)" == v$NODE_MAJOR.* ]]; then
+    echo "Node $("$NODE_HOME/bin/node" -v) already installed"
+    return
+  fi
+  local base="https://nodejs.org/dist/latest-v$NODE_MAJOR.x"
+  local tmp
+  tmp="$(mktemp -d)"
+  curl -fsSL "$base/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt"
+  local tarball
+  tarball="$(awk '/linux-x64\.tar\.xz$/ {print $2}' "$tmp/SHASUMS256.txt")"
+  curl -fsSL "$base/$tarball" -o "$tmp/$tarball"
+  (cd "$tmp" && grep " $tarball\$" SHASUMS256.txt | sha256sum -c -)
+  rm -rf "$NODE_HOME"
+  mkdir -p "$NODE_HOME"
+  tar -xJf "$tmp/$tarball" -C "$NODE_HOME" --strip-components=1
+  rm -rf "$tmp"
+}
+
+persist_node_path() {
+  local marker="# partnerdex: Node $NODE_MAJOR toolchain"
+  if ! grep -Fqx "$marker" "$HOME/.bash_profile" 2>/dev/null; then
+    cat >>"$HOME/.bash_profile" <<EOF
+
+$marker
+case ":\$PATH:" in
+  *":$NODE_HOME/bin:"*) ;;
+  *) export PATH="$NODE_HOME/bin:\$PATH" ;;
+esac
+EOF
+  fi
+}
+
+install_deps() {
+  # `npm ci` always wipes node_modules and recompiles better-sqlite3, so skip
+  # it when the restored tree already matches the lockfile and Node version.
+  local stamp="node_modules/.orb-setup-stamp"
+  local want
+  want="$(node -v) $(sha256sum package-lock.json | cut -d' ' -f1)"
+  if [[ -f "$stamp" && "$(cat "$stamp")" == "$want" ]]; then
+    echo "node_modules matches package-lock.json and $(node -v)"
+    return
+  fi
+  npm ci --no-audit --no-fund
+  echo "$want" >"$stamp"
+}
+
+write_dev_env() {
+  # serve/sync/doctor refuse to start without Partner API credentials. Dummy
+  # values and a disabled sync loop let the dashboard run offline (AGENTS.md).
+  # Real values from the process environment still win over .env.
+  [[ -f .env ]] && return
+  sed \
+    -e 's/^PARTNER_API_TOKEN=.*/PARTNER_API_TOKEN=orb-dummy-token/' \
+    -e 's/^PARTNER_ORGANIZATION_ID=.*/PARTNER_ORGANIZATION_ID=1/' \
+    -e 's/^SYNC_INTERVAL_MINUTES=.*/SYNC_INTERVAL_MINUTES=0/' \
+    .env.example >.env
+  echo "Wrote .env with offline dev defaults"
+}
+
+step "Install Node $NODE_MAJOR" install_node
+step "Persist Node $NODE_MAJOR on PATH" persist_node_path
+export PATH="$NODE_HOME/bin:$PATH"
+step "Install npm dependencies" install_deps
+step "Write dev .env" write_dev_env
