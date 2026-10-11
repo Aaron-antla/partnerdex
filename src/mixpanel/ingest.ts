@@ -48,6 +48,22 @@ const LOOKBACK_DAYS = 2;
  */
 const MIN_INTERVAL_MS = 60 * 60_000;
 
+/** Every attempt, failed or not, so a failing sync is throttled like a working one. */
+const ATTEMPT_KEY = 'mixpanel:attempt';
+
+/**
+ * Set when Mixpanel answers 429, to the instant it said (or an hour). Every
+ * call — background, Sync now, Test — waits it out, because each one made
+ * while limited is counted against the same hourly quota and keeps it shut.
+ */
+const BLOCKED_KEY = 'mixpanel:blocked';
+
+/** Profiles change when a shop installs; re-reading them every hour buys nothing. */
+const IDENTITY_TTL_MS = 24 * 60 * 60_000;
+
+/** A runaway pager is the one way this sync could spend the quota by itself. */
+const MAX_PROFILE_PAGES = 50;
+
 const MS_PER_DAY = 86_400_000;
 
 const HOSTS: Record<Region, { query: string; export: string }> = {
@@ -91,7 +107,17 @@ async function call(connection: MixpanelConnection, url: string, init: RequestIn
     );
   }
   if (response.status === 429) {
-    throw new MixpanelError('Mixpanel rate limit reached (60 queries an hour). Try again later.', 429);
+    const seconds = Number(response.headers.get('retry-after'));
+    const api = url.includes('/api/2.0/export') ? 'Export API' : 'Query API';
+    const error = new MixpanelError(
+      `Mixpanel's ${api} is rate limiting this project${detail ? ` (${detail})` : ''}. ` +
+        'Its quota is shared by everything that queries the project — reports, other tools, other ' +
+        'service accounts — not only this dashboard.',
+      429,
+    );
+    (error as MixpanelError & { retryAfterMs?: number }).retryAfterMs =
+      Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : MIN_INTERVAL_MS;
+    throw error;
   }
   throw new MixpanelError(`Mixpanel answered ${response.status}${detail ? `: ${detail}` : ''}.`, 502);
 }
@@ -144,9 +170,11 @@ export async function fetchIdentities(connection: MixpanelConnection): Promise<M
       if (domain) identities.set(String(profile.$distinct_id), domain);
     }
 
-    if (!result.session_id || (result.results?.length ?? 0) < result.page_size) break;
+    const received = result.results?.length ?? 0;
+    if (!result.session_id || received === 0 || received < (result.page_size || 1000)) break;
+    if (page + 1 >= MAX_PROFILE_PAGES) break;
     sessionId = result.session_id;
-    page = result.page + 1;
+    page = (result.page ?? page) + 1;
   }
 
   return identities;
@@ -303,6 +331,41 @@ export interface UsageSyncResult {
   profiles: number;
 }
 
+/** When Mixpanel last told us to back off, if that is still in force. */
+export function blockedUntil(db: Db, now = new Date()): Date | null {
+  const { syncedThrough } = readSyncState(db, BLOCKED_KEY);
+  if (!syncedThrough) return null;
+  const until = new Date(syncedThrough);
+  return until.getTime() > now.getTime() ? until : null;
+}
+
+function assertNotBlocked(db: Db, now: Date): void {
+  const until = blockedUntil(db, now);
+  if (until) {
+    throw new MixpanelError(
+      `Mixpanel rate limited this project. Waiting until ${until.toISOString().slice(11, 16)} UTC ` +
+        'before asking again, so the quota can reset.',
+      429,
+    );
+  }
+}
+
+/** Records a 429 so every later call waits it out. Other errors pass through. */
+function noteRateLimit(db: Db, error: unknown, now: Date): void {
+  const retry = (error as { retryAfterMs?: number }).retryAfterMs;
+  if (error instanceof MixpanelError && error.status === 429 && retry) {
+    writeSyncState(db, BLOCKED_KEY, { syncedThrough: new Date(now.getTime() + retry).toISOString() });
+  }
+}
+
+function cachedIdentities(db: Db, now: Date): Map<string, string> | null {
+  const rows = db.prepare('SELECT distinct_id AS id, domain, updated_at AS at FROM mixpanel_identities').all() as
+    Array<{ id: string; domain: string; at: string }>;
+  if (rows.length === 0) return null;
+  if (now.getTime() - new Date(rows[0]!.at).getTime() > IDENTITY_TTL_MS) return null;
+  return new Map(rows.map((row) => [row.id, row.domain]));
+}
+
 function skipped(reason: string): UsageSyncResult {
   return { skipped: reason, from: null, to: null, generations: 0, unattributed: 0, shopDays: 0, profiles: 0 };
 }
@@ -323,17 +386,18 @@ export async function syncUsage(
   if (generationEvents.length === 0) return skipped('No generation events are configured.');
 
   const now = options.now ?? new Date();
-  const lastRun = db.prepare('SELECT updated_at FROM sync_state WHERE key = ?').get(SYNC_KEY) as
-    | { updated_at: string }
-    | undefined;
-  if (
-    !options.full &&
-    !options.force &&
-    lastRun &&
-    now.getTime() - new Date(lastRun.updated_at).getTime() < MIN_INTERVAL_MS
-  ) {
-    return skipped('Synced less than an hour ago.');
+  const background = !options.full && !options.force;
+  const until = blockedUntil(db, now);
+  if (until && background) return skipped(`Rate limited by Mixpanel until ${until.toISOString()}.`);
+  assertNotBlocked(db, now);
+
+  // Throttled on the last *attempt*, not the last success: a sync that keeps
+  // failing would otherwise retry on every five-minute tick and spend the quota.
+  const lastAttempt = readSyncState(db, ATTEMPT_KEY).syncedThrough;
+  if (background && lastAttempt && now.getTime() - new Date(lastAttempt).getTime() < MIN_INTERVAL_MS) {
+    return skipped('Tried less than an hour ago.');
   }
+  writeSyncState(db, ATTEMPT_KEY, { syncedThrough: now.toISOString() });
 
   const { syncedThrough } = readSyncState(db, SYNC_KEY);
   const to = day(now);
@@ -344,12 +408,16 @@ export async function syncUsage(
   const from = options.full || resume < backfill ? backfill : resume;
 
   try {
-    options.onProgress?.('Mixpanel: reading user profiles...');
-    const identities = await fetchIdentities(connection);
+    const cached = options.full ? null : cachedIdentities(db, now);
+    let identities = cached;
+    if (!identities) {
+      options.onProgress?.('Mixpanel: reading user profiles...');
+      identities = await fetchIdentities(connection);
+    }
     options.onProgress?.(`Mixpanel: exporting generations ${from} to ${to}...`);
     const usage = await exportUsage(connection, from, to, generationEvents, identities);
 
-    replaceIdentities(db, identities);
+    if (!cached) replaceIdentities(db, identities);
     replaceUsage(db, from, to, usage.counts);
     writeSyncState(db, SYNC_KEY, { syncedThrough: to });
     recordCheck(null, db);
@@ -364,6 +432,7 @@ export async function syncUsage(
       profiles: identities.size,
     };
   } catch (error) {
+    noteRateLimit(db, error, now);
     recordCheck((error as Error).message, db);
     throw error;
   }
@@ -376,7 +445,9 @@ export async function syncUsage(
 export async function checkConnection(db: Db = getDb()): Promise<{ ok: boolean; error: string | null; profiles: number }> {
   const connection = readConnection(db);
   if (!connection) throw new MixpanelError('Mixpanel is not connected.', 404);
+  const now = new Date();
   try {
+    assertNotBlocked(db, now);
     const identities = await fetchIdentities(connection);
     const yesterday = day(new Date(Date.now() - MS_PER_DAY));
     const params = new URLSearchParams({
@@ -389,6 +460,7 @@ export async function checkConnection(db: Db = getDb()): Promise<{ ok: boolean; 
     recordCheck(null, db);
     return { ok: true, error: null, profiles: identities.size };
   } catch (error) {
+    noteRateLimit(db, error, now);
     const message = (error as Error).message;
     recordCheck(message, db);
     return { ok: false, error: message, profiles: 0 };

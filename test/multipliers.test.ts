@@ -173,6 +173,38 @@ describe('multipliers: Mixpanel usage', () => {
     assert.ok(requests.some((request) => request.url.startsWith('https://data-eu.mixpanel.com/api/2.0/export')));
   });
 
+  it('stops calling Mixpanel once it says 429, and throttles failed syncs like working ones', async () => {
+    let calls = 0;
+    useMixpanelFetch((async () => {
+      calls += 1;
+      return new Response('{"error":"rate limit exceeded"}', { status: 429 });
+    }) as typeof fetch);
+
+    await assert.rejects(syncUsage(getDb(), { now: NOW, force: true }), /rate limiting/);
+    const afterFirst = calls;
+
+    // The background loop ticks every few minutes; none of these may reach Mixpanel.
+    for (const minutes of [5, 10, 30]) {
+      const later = new Date(NOW.getTime() + minutes * 60_000);
+      assert.match((await syncUsage(getDb(), { now: later })).skipped ?? '', /Rate limited/);
+    }
+    // Nor may a manual "Sync now" before the wait is over.
+    await assert.rejects(syncUsage(getDb(), { now: new Date(NOW.getTime() + 20 * 60_000), force: true }), /Waiting until/);
+    assert.equal(calls, afterFirst);
+
+    // After the hour, one failing background attempt is made, then it is throttled again.
+    useMixpanelFetch((async () => {
+      calls += 1;
+      return new Response('nope', { status: 500 });
+    }) as typeof fetch);
+    const hourLater = new Date(NOW.getTime() + 61 * 60_000);
+    await assert.rejects(syncUsage(getDb(), { now: hourLater }));
+    const afterRetry = calls;
+    const tick = new Date(hourLater.getTime() + 5 * 60_000);
+    assert.match((await syncUsage(getDb(), { now: tick })).skipped ?? '', /less than an hour/);
+    assert.equal(calls, afterRetry);
+  });
+
   it('never hands the secret back', async () => {
     const server = createApp().listen(0);
     await new Promise((resolve) => server.once('listening', resolve));
