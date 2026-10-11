@@ -19,6 +19,7 @@ import {
 import { rebuildDerivedTables } from './derive.js';
 import { syncReviews, type ReviewSyncResult } from '../appstore/ingest.js';
 import { syncListingEvents, type ListingSyncResult } from '../bigquery/ingest.js';
+import { syncUsage, type UsageSyncResult } from '../mixpanel/ingest.js';
 
 /**
  * Transactions and events can be recorded slightly after they occur, so each
@@ -177,6 +178,8 @@ export interface SyncResult {
   reviewEvents: number;
   reviews: ReviewSyncResult;
   listing: ListingSyncResult;
+  /** Null when the usage sync failed; the error is reported through progress. */
+  usage: UsageSyncResult | null;
 }
 
 export async function runSync(options: SyncOptions = {}): Promise<SyncResult> {
@@ -230,8 +233,21 @@ export async function runSync(options: SyncOptions = {}): Promise<SyncResult> {
     onProgress(`Listing traffic: ${listing.rows} event(s) across ${listing.apps.length} app(s).`);
   }
 
+  // Product usage behind the Multipliers page. Throttled to once an hour inside,
+  // quiet when Mixpanel is not connected, and never allowed to fail the Partner
+  // sync: a revoked Mixpanel secret is no reason to stop counting revenue.
+  let usage: UsageSyncResult | null = null;
+  try {
+    usage = await syncUsage(db, { full: options.full, onProgress });
+    if (!usage.skipped) {
+      onProgress(`Usage: ${usage.generations} generation(s) from ${usage.from} to ${usage.to}.`);
+    }
+  } catch (error) {
+    onProgress(`Mixpanel usage sync failed: ${(error as Error).message}`);
+  }
+
   onProgress('Rebuilding derived subscription and install indexes...');
   const derived = rebuildDerivedTables(db);
 
-  return { apps: appIds, transactions, events, reviews, listing, ...derived };
+  return { apps: appIds, transactions, events, reviews, listing, usage, ...derived };
 }

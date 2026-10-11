@@ -727,3 +727,169 @@ export const testChannel = (
   id: string,
 ): Promise<{ ok: boolean; error: string | null; channel: NotificationChannel }> =>
   sendJson('POST', `${CHANNELS}/${encodeURIComponent(id)}/test`);
+
+/* ------------------------------------------------------------ multipliers */
+
+export type MultiplierStatus = 'paying' | 'trialing' | 'free' | 'uninstalled' | 'unmatched';
+
+export interface MultiplierCustomer {
+  rank: number;
+  shopId: string | null;
+  name: string | null;
+  domain: string;
+  status: MultiplierStatus;
+  plan: string | null;
+  tier: string | null;
+  listMrr: number;
+  paidMrr: number;
+  discounted: boolean;
+  credits: number;
+  revenue: number;
+  generations: number;
+  usageCost: number;
+  fixedCost: number;
+  cost: number;
+  profit: number;
+  margin: number | null;
+  revenuePerGeneration: number | null;
+  cumulativeProfit: number;
+}
+
+export interface MultiplierSettings {
+  costPerGeneration: number;
+  costPerPayingShop: number;
+  generationEvents: string[];
+  excludedDomains: string[];
+  updatedAt: string | null;
+}
+
+export interface Ceiling {
+  key: string;
+  label: string;
+  priceRange: [number, number] | null;
+  current: number;
+  newPerMonth: number;
+  lostPerMonth: number;
+  churnRate: number;
+  ceiling: number | null;
+  progress: number | null;
+  paidMrr: number;
+  generationsPerShop: number | null;
+  profitPerShop: number | null;
+}
+
+export interface MultipliersReport {
+  generatedAt: string;
+  currency: string | null;
+  window: { from: string; to: string; days: number };
+  settings: MultiplierSettings;
+  usage: {
+    connected: boolean;
+    lastSyncedThrough: string | null;
+    latestDay: string | null;
+    shopsWithUsage: number;
+    generations: number;
+    unmatchedDomains: string[];
+  };
+  excluded: number;
+  whale: {
+    customers: number;
+    revenue: number;
+    paidMrr: number;
+    credits: number;
+    cost: number;
+    finalProfit: number;
+    peakProfit: number;
+    peakRank: number;
+    whaleRatio: number | null;
+    makers: { count: number; profit: number };
+    takers: { count: number; profit: number };
+    neutral: number;
+    top20Share: number | null;
+    bottom20Profit: number;
+    thin: number;
+    payingWithoutUsage: number;
+  };
+  customers: MultiplierCustomer[];
+  ceiling: {
+    months: number;
+    overall: Ceiling;
+    revenue: {
+      listMrr: number;
+      paidMrr: number;
+      newMrrPerMonth: number;
+      netLossPerMonth: number;
+      netMrrChurnRate: number;
+      maxMrr: number | null;
+      maxPaidMrr: number | null;
+      progress: number | null;
+    };
+    tiers: Ceiling[];
+    history: Array<{ date: string; current: number; ceiling: number | null }>;
+  };
+}
+
+export const fetchMultipliers = (): Promise<MultipliersReport> =>
+  getJson<MultipliersReport>('/api/multipliers');
+
+/* --------------------------------------------------------------- mixpanel */
+
+/** The service account, minus its secret — that is posted once and never sent back. */
+export interface MixpanelConnection {
+  projectId: string;
+  region: 'US' | 'EU' | 'IN';
+  username: string;
+  checkedAt: string | null;
+  lastError: string | null;
+  updatedAt: string;
+}
+
+export interface MixpanelSettingsPayload {
+  connection: MixpanelConnection | null;
+  settings: MultiplierSettings;
+  stats: {
+    shops: number;
+    earliest: string | null;
+    latest: string | null;
+    generations: number;
+    profiles: number;
+  };
+}
+
+export interface UsageSyncResult {
+  skipped: string | null;
+  from: string | null;
+  to: string | null;
+  generations: number;
+  unattributed: number;
+  shopDays: number;
+  profiles: number;
+}
+
+const MP = '/api/mixpanel';
+
+export const fetchMixpanel = (): Promise<MixpanelSettingsPayload> =>
+  getJson<MixpanelSettingsPayload>(MP);
+
+export const saveMixpanel = (input: {
+  projectId: string;
+  region: string;
+  username: string;
+  secret?: string;
+}): Promise<MixpanelSettingsPayload> => sendJson('PUT', MP, input);
+
+export const disconnectMixpanel = (): Promise<void> => sendJson<void>('DELETE', MP);
+
+export const saveMultiplierSettings = (input: {
+  costPerGeneration: number;
+  costPerPayingShop: number;
+  generationEvents: string;
+  excludedDomains: string;
+}): Promise<MixpanelSettingsPayload> => sendJson('PUT', `${MP}/settings`, input);
+
+export const checkMixpanel = (): Promise<
+  MixpanelSettingsPayload & { check: { ok: boolean; error: string | null; profiles: number } }
+> => sendJson('POST', `${MP}/check`);
+
+export const syncMixpanel = (full = false): Promise<MixpanelSettingsPayload & { result: UsageSyncResult }> =>
+  sendJson('POST', `${MP}/sync${full ? '?full=1' : ''}`);

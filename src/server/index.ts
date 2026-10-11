@@ -30,6 +30,8 @@ import { sendError } from './errors.js';
 import { notificationsRouter } from './notifications.js';
 import { listingsRouter } from './listings.js';
 import { bigqueryRouter } from './bigquery.js';
+import { mixpanelRouter } from './mixpanel.js';
+import { multipliersReport } from '../multipliers/index.js';
 import { listAppSources } from '../bigquery/connection.js';
 import { funnelReport } from '../metrics/reports/funnel.js';
 
@@ -119,6 +121,20 @@ export function createApp(): express.Express {
   app.use('/api/notifications', notificationsRouter());
   app.use('/api/listings', listingsRouter());
   app.use('/api/bigquery', bigqueryRouter());
+  app.use('/api/mixpanel', mixpanelRouter());
+
+  /**
+   * The Multipliers page: profit whale and cancellation ceiling. Its own route
+   * because it is a ranked population and a set of steady states, not a time
+   * series over the shared window — it always reads the last 30 days.
+   */
+  app.get('/api/multipliers', (_request, response) => {
+    try {
+      response.json(multipliersReport());
+    } catch (error) {
+      sendError(response, error);
+    }
+  });
 
   /**
    * The install funnel.

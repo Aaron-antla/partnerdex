@@ -1,6 +1,8 @@
 import type { ComponentType } from 'react';
 import {
+  Activity,
   Bell,
+  Sigma,
   Database,
   Filter,
   LayoutDashboard,
@@ -41,6 +43,8 @@ const ICONS: Record<string, ComponentType<{ className?: string }>> = {
   reviews: Star,
   listings: Store,
   bigquery: Database,
+  multipliers: Sigma,
+  mixpanel: Activity,
   notifications: Bell,
 };
 

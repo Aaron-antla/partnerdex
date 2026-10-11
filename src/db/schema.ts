@@ -452,6 +452,59 @@ CREATE INDEX IF NOT EXISTS idx_listing_events_step
 CREATE INDEX IF NOT EXISTS idx_listing_events_visitor
   ON listing_events (anonymous_id, occurred_at);
 
+-- The Mixpanel service account the usage sync reads with. Role 4, durable, and
+-- treated like the BigQuery key: \`secret\` is write-only over the API. The
+-- username is a name, not a credential, and is what the settings page shows.
+CREATE TABLE IF NOT EXISTS mixpanel_connection (
+  id          TEXT PRIMARY KEY CHECK (id = 'default'),
+  project_id  TEXT NOT NULL,
+  -- 'US' | 'EU' | 'IN'. A project answers only on its own residency's hosts.
+  region      TEXT NOT NULL DEFAULT 'US',
+  username    TEXT NOT NULL,
+  secret      TEXT NOT NULL,
+  checked_at  TEXT,
+  last_error  TEXT,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+) WITHOUT ROWID;
+
+-- The cost model behind the Multipliers page. Separate from the connection so
+-- it can be set, and the page read, before Mixpanel is connected at all.
+--
+-- \`generation_events\` and \`excluded_domains\` are newline-separated lists.
+-- An excluded entry may use \`*\` as a wildcard (\`antla-*\`); a bare name with
+-- no dot is matched against the part before \`.myshopify.com\`.
+CREATE TABLE IF NOT EXISTS multiplier_settings (
+  id                   TEXT PRIMARY KEY CHECK (id = 'default'),
+  cost_per_generation  REAL NOT NULL DEFAULT 0,
+  cost_per_paying_shop REAL NOT NULL DEFAULT 0,
+  generation_events    TEXT NOT NULL DEFAULT '',
+  excluded_domains     TEXT NOT NULL DEFAULT '',
+  updated_at           TEXT NOT NULL
+) WITHOUT ROWID;
+
+-- Which shop a Mixpanel distinct id belongs to, read from the user profile's
+-- \`domain\` property (or \`$name\` when that is the myshopify domain). Role 1:
+-- rebuilt from Mixpanel on every usage sync.
+CREATE TABLE IF NOT EXISTS mixpanel_identities (
+  distinct_id TEXT PRIMARY KEY,
+  domain      TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+) WITHOUT ROWID;
+
+-- Billable generations per shop per UTC day, aggregated at ingest. Keyed on the
+-- myshopify domain rather than the shop id, because that is the only identifier
+-- Mixpanel and the Partner API share; the join to \`shops\` happens at read time
+-- so a shop the Partner API has not reported yet is still counted.
+CREATE TABLE IF NOT EXISTS shop_usage_daily (
+  domain      TEXT NOT NULL,
+  day         TEXT NOT NULL,
+  generations INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (domain, day)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_usage_day ON shop_usage_daily (day);
+
 CREATE TABLE IF NOT EXISTS sync_state (
   key            TEXT PRIMARY KEY,
   cursor         TEXT,

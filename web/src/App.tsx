@@ -25,6 +25,8 @@ import { AppSidebar, NavToggle } from './components/AppSidebar';
 import { Listings } from './components/Listings';
 import { BigQuery } from './components/BigQuery';
 import { Funnel } from './components/Funnel';
+import { Multipliers } from './components/Multipliers';
+import { Mixpanel } from './components/Mixpanel';
 import { Notifications } from './components/Notifications';
 import { UnmatchedReviews } from './components/Reviews';
 import { DEFAULT_FILTERS, customerFilterFor, metricsFor, pageById, type PageFilter } from './pages';
@@ -270,6 +272,8 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
   const isListings = page.kind === 'listings';
   const isBigQuery = page.kind === 'bigquery';
   const isFunnel = page.kind === 'funnel';
+  const isMultipliers = page.kind === 'multipliers';
+  const isMixpanel = page.kind === 'mixpanel';
   // Only a grid of cards reads the shared window, so only it shows the filters
   // that drive one — and only it has figures that could go stale. Reviews
   // qualifies: it carries cards over that window, with its own list underneath.
@@ -278,7 +282,16 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
   // shape, so it shows the controls without joining the overview request.
   // A metric's customer list is live-as-of-now, so the range does not apply;
   // the app picker still does.
-  const isMetrics = !isCustomers && !isNotifications && !isListings && !isBigQuery && !isMetricCustomers;
+  // Multipliers reads a fixed 30 days of its own, so it is not a metric page
+  // either: no shared window, no filters.
+  const isMetrics =
+    !isCustomers &&
+    !isNotifications &&
+    !isListings &&
+    !isBigQuery &&
+    !isMultipliers &&
+    !isMixpanel &&
+    !isMetricCustomers;
   const filters: PageFilter[] = isMetricCustomers ? ['app'] : (page.filters ?? DEFAULT_FILTERS);
 
   const [collapsed, setCollapsed] = useState(
@@ -596,6 +609,7 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
         !isListings &&
         !isReviews &&
         !isBigQuery &&
+        !isMixpanel &&
         !isFunnel &&
         !isMetricCustomers &&
         status &&
@@ -637,6 +651,10 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
         {isListings ? <Listings /> : null}
 
         {isBigQuery ? <BigQuery /> : null}
+
+        {isMixpanel ? <Mixpanel /> : null}
+
+        {isMultipliers ? <Multipliers key={dataVersion} /> : null}
 
         {/* Three states, and the middle one is the point: an install with no
             dataset configured anywhere cannot draw this report for any app, and

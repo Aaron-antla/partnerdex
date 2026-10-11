@@ -43,7 +43,16 @@ export interface PageSpec {
    * Reviews is the one page that is both: cards over the shared window, and a
    * searchable list of the documents behind them.
    */
-  kind?: 'metrics' | 'customers' | 'notifications' | 'reviews' | 'listings' | 'funnel' | 'bigquery';
+  kind?:
+    | 'metrics'
+    | 'customers'
+    | 'notifications'
+    | 'reviews'
+    | 'listings'
+    | 'funnel'
+    | 'bigquery'
+    | 'multipliers'
+    | 'mixpanel';
   /**
    * Which shared filters this page shows, in order.
    *
@@ -393,10 +402,33 @@ const BIGQUERY: PageSpec = {
   cards: [],
 };
 
+/**
+ * Who earns their keep and how big the business can get, from Partner API
+ * revenue and Mixpanel usage. A fixed 30-day read rather than the shared window:
+ * a ranked population and a steady state, not a series.
+ */
+const MULTIPLIERS: PageSpec = {
+  id: 'multipliers',
+  label: 'Multipliers',
+  title: 'Multipliers',
+  blurb: 'Which customers make the profit, which ones cost it, and the size churn caps you at.',
+  kind: 'multipliers',
+  cards: [],
+};
+
+const MIXPANEL: PageSpec = {
+  id: 'mixpanel',
+  label: 'Mixpanel',
+  title: 'Mixpanel',
+  blurb: 'Product usage and the cost model behind Multipliers.',
+  kind: 'mixpanel',
+  cards: [],
+};
+
 export const NAV: NavGroup[] = [
   { label: '', pages: [OVERVIEW, CUSTOMERS] },
-  { label: 'Reports', pages: [REVENUE, SUBSCRIPTIONS, CHURN, FUNNEL, REVIEWS] },
-  { label: 'Settings', pages: [LISTINGS, BIGQUERY, NOTIFICATIONS] },
+  { label: 'Reports', pages: [REVENUE, SUBSCRIPTIONS, CHURN, MULTIPLIERS, FUNNEL, REVIEWS] },
+  { label: 'Settings', pages: [LISTINGS, BIGQUERY, MIXPANEL, NOTIFICATIONS] },
 ];
 
 export const PAGES: PageSpec[] = NAV.flatMap((group) => group.pages);

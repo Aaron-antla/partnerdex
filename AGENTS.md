@@ -14,6 +14,9 @@ PartnerDex is a single Node.js/TypeScript app (npm, Node >= 20): an Express API 
 A freshly-booted instance has an empty DB, so all metrics read zero. To populate realistic data without the live Partner API, insert `AppEventNode`s / `TransactionNode`s through the app's real ingest+derive path and the metrics compute normally:
 `insertAppEvents(db, appId, events)` + `insertTransactions(db, txns)` + `rebuildDerivedTables(db)` (all in `src/sync/ingest.ts` / `src/sync/derive.ts`). `test/helpers.ts` `seed(...)` shows the exact node shapes (subscription activate/cancel, relationship install/uninstall, subscription sales). `seedOneTimeCharges(...)` seeds `AppOneTimeSale` rows the same way; they count in `one_time_charges` and `gross_earnings` and never become MRR. Anchor fixture dates relative to "now" or the default "last 12 months" window shows nothing.
 
+### Multipliers (profit whale + cancellation ceiling)
+`src/multipliers/index.ts` builds `/api/multipliers` from Partner API revenue plus per-shop usage in `shop_usage_daily` (domain, UTC day, generations). Usage normally comes from the Mixpanel export (`src/mixpanel/ingest.ts`, service account on Settings → Mixpanel); offline, write rows with `replaceUsage(db, from, to, counts)` and set costs with `saveSettings(...)` (`src/mixpanel/connection.ts`). Revenue is what a shop actually pays (latest payment when below list), not list MRR.
+
 ### Adding a dashboard chart
 Metrics are one implementation with three registrations. Implement the report in `src/metrics/reports/*.ts` (`kind: 'stock'` for as-of levels like MRR, `kind: 'flow'` for period sums like earnings), register it in `src/metrics/registry.ts`, then add a card in `web/src/pages.ts`. Overview stays the five headline figures; Revenue is where cash breakdowns (gross earnings, one-time charges) live. Do not fold one-time or usage cash into MRR.
 
