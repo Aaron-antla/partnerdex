@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { closeDb, getDb, type Db } from '../src/db/index.js';
+import { migrate } from '../src/db/migrate.js';
+import { runMetric } from '../src/metrics/registry.js';
 import {
   buildDailyReportMessage,
+  collectDailySnapshot,
   dueDailyReport,
   type DailySnapshot,
 } from '../src/notifications/dailyReport.js';
@@ -28,7 +31,7 @@ import {
   DAILY_REPORT,
   LEGACY_APP_SUBSCRIPTION_TOPIC,
 } from '../src/notifications/topics.js';
-import { APP_ID, resetEnvironment, seed, seedForApp } from './helpers.js';
+import { APP_ID, pointAt, resetEnvironment, seed, seedForApp } from './helpers.js';
 import { APP_EVENTS_QUERY } from '../src/partner/queries.js';
 
 /**
@@ -495,6 +498,103 @@ describe('saying it exactly once', () => {
     assert.equal((await dispatchPending(db)).sent, 0);
     assert.equal(sent.length, 1);
   });
+
+  it('does not repeat a conversion or double revenue when its payment arrives later', async () => {
+    const trial = {
+      chargeRef: 'c1',
+      shopId: '1',
+      amount: 49.99,
+      activatedAt: '2024-03-08T16:47:27Z',
+      billingOn: '2024-03-15T00:00:00Z',
+    };
+    const db = seed([trial]);
+    const channelId = channelWithTopic(db);
+    watermark(db, channelId, '2024-03-14T00:00:00Z');
+    stubFetch(ok);
+
+    const metric = (key: string) => runMetric(key, {
+      period: 'custom', start: '2024-03-01', end: '2024-04-30', interval: 'day',
+    }, { now: new Date('2024-05-01T00:00:00Z') });
+    const assertRevenue = (gross: number) => {
+      assert.equal(metric('mrr').value, 49.99);
+      assert.equal(metric('arr').value, 599.88);
+      assert.equal(metric('mrr_movement').value, 49.99);
+      assert.equal(metric('gross_earnings').value, gross);
+      assert.equal(metric('active_subscriptions').value, 1);
+      assert.equal(metric('trials').meta?.converted, 1);
+    };
+
+    // The billing date announces the conversion before any cash is recorded.
+    assertRevenue(0);
+    assert.equal(pointAt(metric('mrr'), '2024-03-14'), 0);
+    assert.equal(pointAt(metric('mrr_movement'), '2024-03-15'), 49.99);
+    assert.equal((await dispatchPending(db)).sent, 1);
+    assert.deepEqual(headlines(), ['Trial converted']);
+
+    const paid = { ...trial, firstSaleAt: '2024-03-16T07:02:53Z' };
+    seed([paid]);
+    assertRevenue(49.99);
+    // The date is still corrected: the old day's movement is replaced, not added to.
+    assert.equal(pointAt(metric('mrr_movement'), '2024-03-15'), 0);
+    assert.equal(pointAt(metric('mrr_movement'), '2024-03-16'), 49.99);
+    const daily = collectDailySnapshot(db, new Date('2024-03-16T18:00:00Z'));
+    assert.equal(daily.mrr.value, 49.99);
+    assert.equal(daily.grossPayments.value, 49.99);
+    assert.equal((await dispatchPending(db)).sent, 0);
+    assert.deepEqual(headlines(), ['Trial converted']);
+
+    // Overlap re-ingests the same sale; the next real payment still counts as cash.
+    seed([paid]);
+    assertRevenue(49.99);
+    seed([{ ...paid, extraSales: [{ at: '2024-04-15T07:00:00Z', gross: 49.99 }] }]);
+    assertRevenue(99.98);
+    assert.equal((await dispatchPending(db)).sent, 0);
+  });
+
+  for (const ok of [1, 0]) {
+    it(`honors a legacy conversion ${ok ? 'delivery' : 'permanent failure'} after its time changes`, async () => {
+      const trial = {
+        chargeRef: 'c1', shopId: '1', amount: 49.99,
+        activatedAt: '2024-03-08T16:47:27Z',
+        billingOn: '2024-03-15T00:00:00Z',
+      };
+      const db = seed([trial]);
+      const channelId = channelWithTopic(db);
+      watermark(db, channelId, '2024-03-14T00:00:00Z');
+      const legacyId = `${APP_ID}|1|derived:trial_converted|2024-03-15T00:00:00.000Z|gid://shopify/AppSubscription/c1`;
+      db.prepare("UPDATE customer_events SET event_id = ? WHERE type = 'trial_converted'")
+        .run(legacyId);
+      db.prepare(
+        `INSERT INTO notification_deliveries (channel_id, event_id, delivered_at, ok, error)
+         VALUES (?, ?, '2024-03-15T00:02:00.000Z', ?, ?)`,
+      ).run(channelId, legacyId, ok, ok ? null : 'Slack replied 400: invalid_payload');
+      db.pragma('user_version = 3');
+      migrate(db);
+      stubFetch(() => new Response('ok', { status: 200 }));
+
+      // Startup still has old event ids; the first sync uses the stable ids.
+      assert.equal((await dispatchPending(db)).sent, 0);
+      seed([{ ...trial, firstSaleAt: '2024-03-16T07:02:53Z' }]);
+      assert.equal((await dispatchPending(db)).sent, 0);
+
+      // Another channel still gets the conversion, and a new charge on this
+      // shop is not mistaken for the trial that was already reported.
+      const otherId = channelWithTopic(db, '#other');
+      watermark(db, otherId, '2024-03-14T00:00:00Z');
+      assert.equal((await dispatchPending(db)).sent, 1);
+      setTopic(otherId, TOPIC, false, db);
+      seed([
+        {
+          chargeRef: 'c2', shopId: '1', amount: 19.99,
+          activatedAt: '2024-05-01T00:00:00Z',
+          billingOn: '2024-05-08T00:00:00Z',
+          firstSaleAt: '2024-05-09T09:10:11Z',
+        },
+      ]);
+      assert.equal((await dispatchPending(db)).sent, 2);
+      assert.deepEqual(headlines(), ['Trial converted', 'Trial started', 'Trial converted']);
+    });
+  }
 
   it('tells a second channel the same news', async () => {
     const db = seed([

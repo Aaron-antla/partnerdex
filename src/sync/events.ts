@@ -186,6 +186,11 @@ function rawEventId(row: RawEventRow): string {
 }
 
 function derivedEventId(sub: SubRow, kind: string, at: string): string {
+  // A charge converts only once. Settlement can replace the inferred billing
+  // date, but correcting that date must not make it a new event for Slack.
+  if (kind === 'derived:trial_converted') {
+    return `${sub.app_id}|${sub.shop_id}|${kind}|${sub.charge_id}`;
+  }
   return `${sub.app_id}|${sub.shop_id}|${kind}|${at}|${sub.charge_id}`;
 }
 

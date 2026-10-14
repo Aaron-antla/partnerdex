@@ -293,3 +293,45 @@ describe('migration 3, uninstall survey columns', () => {
     db.close();
   });
 });
+
+describe('migration 4, stable trial conversion delivery ids', () => {
+  it('preserves duplicate historical deliveries and does not duplicate them when replayed', () => {
+    const db = freshDb();
+    for (const channel of ['a', 'b']) {
+      db.prepare(
+        `INSERT INTO notification_channels (id, name, webhook_url, created_at)
+         VALUES (?, ?, 'https://hooks.slack.com/services/local-test-only', '2024-03-01T00:00:00Z')`,
+      ).run(channel, `#${channel}`);
+    }
+    const first = '111|1|derived:trial_converted|2024-03-15T00:00:00.000Z|gid://shopify/AppSubscription/c1';
+    const corrected = '111|1|derived:trial_converted|2024-03-16T07:02:53.000Z|gid://shopify/AppSubscription/c1';
+    const unrelated = '111|1|derived:trial_started|2024-03-08T16:47:27.000Z|gid://shopify/AppSubscription/c1';
+    for (const [channel, id] of [['a', first], ['a', corrected], ['b', first], ['a', unrelated]]) {
+      db.prepare(
+        `INSERT INTO notification_deliveries (channel_id, event_id, delivered_at, ok)
+         VALUES (?, ?, '2024-03-16T07:14:00.000Z', 1)`,
+      ).run(channel, id);
+    }
+    const records = () => db.prepare(
+      'SELECT * FROM notification_deliveries ORDER BY channel_id, event_id',
+    ).all();
+    const original = records();
+    db.pragma('user_version = 3');
+    migrate(db);
+
+    const stableId = '111|1|derived:trial_converted|gid://shopify/AppSubscription/c1';
+    const aliases = db.prepare(
+      'SELECT channel_id FROM notification_deliveries WHERE event_id = ? ORDER BY channel_id',
+    ).all(stableId);
+    assert.deepEqual(aliases, [{ channel_id: 'a' }, { channel_id: 'b' }]);
+    assert.deepEqual(db.prepare(
+      'SELECT * FROM notification_deliveries WHERE event_id <> ? ORDER BY channel_id, event_id',
+    ).all(stableId), original, 'keep existing delivery history and other event types unchanged');
+
+    const migrated = records();
+    db.pragma('user_version = 3');
+    migrate(db);
+    assert.deepEqual(records(), migrated, 'replaying must not add another alias or alter history');
+    db.close();
+  });
+});

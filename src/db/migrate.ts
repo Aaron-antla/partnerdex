@@ -167,6 +167,38 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+
+  {
+    version: 4,
+    up: (db) => {
+      // Trial conversions now keep one id per charge when settlement corrects
+      // their timestamp. Keep the old records too: until the next rebuild,
+      // customer_events still uses the timestamped ids.
+      const deliveries = db.prepare(
+        `SELECT channel_id, event_id, delivered_at, ok, error
+         FROM notification_deliveries
+         WHERE event_id LIKE '%|derived:trial_converted|%'
+         ORDER BY delivered_at`,
+      ).all() as Array<{
+        channel_id: string;
+        event_id: string;
+        delivered_at: string;
+        ok: number;
+        error: string | null;
+      }>;
+      const insert = db.prepare(
+        `INSERT INTO notification_deliveries (channel_id, event_id, delivered_at, ok, error)
+         VALUES (@channel_id, @event_id, @delivered_at, @ok, @error)
+         ON CONFLICT(channel_id, event_id) DO NOTHING`,
+      );
+      for (const delivery of deliveries) {
+        const parts = delivery.event_id.split('|');
+        if (parts.length !== 5 || parts[2] !== 'derived:trial_converted') continue;
+        parts.splice(3, 1);
+        insert.run({ ...delivery, event_id: parts.join('|') });
+      }
+    },
+  },
 ];
 
 export function readUserVersion(db: Db): number {
