@@ -1,5 +1,9 @@
 @import 'tailwindcss';
 
+@theme {
+  --font-sans: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
 /* Safety: a failed sidebar width utility used to make the rail `fixed` and
    cover the whole page, which swallowed clicks on Range and hid the new UI. */
 [data-slot='sidebar-wrapper'] {
@@ -186,10 +190,17 @@ body {
   margin: 0;
   background: var(--page);
   color: var(--text-primary);
-  font-family: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: inherit;
 }
 
 /* Semi-bold and tightened, at every size the dashboard sets a heading in. */
@@ -1355,8 +1366,7 @@ button.primary:disabled,
   padding: 0;
 }
 
-/* The monospace `.channel-hint` is for a masked credential. Prose in the same
-   slot — a review count, a listing title — is not that, and reads badly in it. */
+/* Prose beside a channel, such as a review count or listing title. */
 .channel-note {
   margin: 2px 0 0;
   color: var(--muted);
@@ -1388,7 +1398,7 @@ button.primary:disabled,
   margin: 2px 0 0;
   color: var(--muted);
   font-size: 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: inherit;
 }
 
 .channel-actions {
@@ -3034,7 +3044,7 @@ button.primary:disabled,
   border: 0;
 }
 
-/* The service-account key. Monospaced because it is pasted, never typed. */
+/* The service-account key uses the same typography as the rest of Settings. */
 .bq-key {
   width: 100%;
   padding: 9px 11px;
@@ -3042,7 +3052,7 @@ button.primary:disabled,
   border-radius: 8px;
   background: var(--surface-2);
   color: var(--text-primary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: inherit;
   font-size: 12px;
   line-height: 1.5;
   resize: vertical;
@@ -3290,4 +3300,186 @@ button.primary:disabled,
 
 .mx-page .card-head .funnel-views {
   flex-wrap: wrap;
+}
+
+/* Shared dashboard palette. Portal-mounted menus inherit it as well. */
+body:has(.polaris-overview) {
+  color-scheme: light;
+  --page: #f1f1f1;
+  --surface-1: #fff;
+  --surface-2: #ebebeb;
+  --text-primary: #303030;
+  --text-secondary: #616161;
+  --muted: #616161;
+  --border: #d4d4d4;
+  --hover-wash: rgb(0 0 0 / 5%);
+  --brand: #303030;
+  --brand-hover: #1a1a1a;
+  --brand-accent: #005bd3;
+  --series-1: #4890f5;
+  --series-2: #9b78ef;
+  --grid: #ebebeb;
+  --axis: #d4d4d4;
+  --good: #29845a;
+  --critical: #e51c00;
+  --delta-up: #047b5d;
+  --delta-down: #c5280c;
+  --shadow-sm: 0 1px 0 rgb(0 0 0 / 7%);
+  --shadow-md: 0 1px 0 rgb(0 0 0 / 7%), 0 0 0 1px rgb(0 0 0 / 5%);
+  --sidebar: var(--surface-2);
+  --sidebar-foreground: var(--text-primary);
+  --sidebar-primary: var(--brand);
+  --sidebar-accent: var(--hover-wash);
+  --sidebar-accent-foreground: var(--text-primary);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--brand-accent);
+  color: var(--text-primary);
+  background: var(--page);
+}
+
+body:has(.polaris-dark) {
+  color-scheme: dark;
+  --page: #0b1017;
+  --surface-1: #141c27;
+  --surface-2: #0f1620;
+  --text-primary: #edf2f9;
+  --text-secondary: #acb9ca;
+  --muted: #acb9ca;
+  --border: #2b3a4e;
+  --hover-wash: rgb(147 183 232 / 9%);
+  --brand: #e2ebf7;
+  --brand-hover: #fff;
+  --brand-on: #0b1017;
+  --brand-accent: #91baff;
+  --series-1: #78aaff;
+  --series-2: #b39af4;
+  --grid: #263345;
+  --axis: #40536c;
+  --good: #5cce9a;
+  --critical: #ff8a80;
+  --delta-up: #8ce9b5;
+  --delta-down: #ffb4ab;
+  --shadow-sm: 0 1px 0 rgb(0 0 0 / 20%);
+  --shadow-md: 0 1px 0 rgb(0 0 0 / 25%), 0 0 0 1px #263448;
+}
+
+.polaris-overview .main {
+  width: 100%;
+  max-width: 1600px;
+  margin-inline: auto;
+  padding: 28px 32px 48px;
+}
+.polaris-overview .masthead { margin-bottom: 28px; }
+.polaris-overview .masthead h1 { font-size: 20px; font-weight: 650; }
+.polaris-overview .masthead .subtitle { margin-top: 4px; }
+.polaris-overview [data-slot='sidebar-header'] { border-bottom: 0; }
+.polaris-overview [data-slot='sidebar-group-label'] {
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 12px;
+}
+.polaris-overview [data-slot='sidebar-menu-button'] { border-radius: 8px; }
+.polaris-overview [data-slot='sidebar-menu-button'][data-active='true'] {
+  background: var(--hover-wash);
+  box-shadow: none;
+}
+.polaris-intro {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.polaris-intro h2 { margin: 0; font-size: 16px; }
+.polaris-intro p { margin: 3px 0 0; font-size: 13px; color: var(--muted); }
+.polaris-overview .controls {
+  padding: 16px;
+  margin-bottom: 16px;
+  border-radius: 12px;
+  background: var(--surface-1);
+  box-shadow: var(--shadow-md);
+}
+.polaris-overview .control label {
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.polaris-overview .control > button {
+  height: 32px;
+  background: var(--surface-1);
+  border-color: var(--axis);
+  border-radius: 8px;
+  font-size: 13px;
+  box-shadow: 0 1px 0 rgb(0 0 0 / 5%);
+}
+.polaris-overview .card-grid > :is(s-section, .polaris-panel) {
+  display: block;
+  grid-column: span 2;
+  min-width: 0;
+}
+.polaris-overview s-section:not(:defined),
+.polaris-panel {
+  padding: 16px;
+  border-radius: 16px;
+  background: var(--surface-1);
+  box-shadow: var(--shadow-md);
+}
+.polaris-overview :is(s-section, .polaris-panel) .card {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  font-family: var(--font-sans);
+  gap: 18px;
+  min-height: 360px;
+  color: var(--text-primary);
+}
+.polaris-overview :is(s-section, .polaris-panel) [data-slot='card-header'],
+.polaris-overview :is(s-section, .polaris-panel) [data-slot='card-content'] { padding: 0; }
+.polaris-overview :is(s-section, .polaris-panel) [data-slot='card-content'] {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+.polaris-overview [data-slot='chart'] { margin-top: auto; }
+.polaris-overview [data-slot='card-title'] { font-size: 13px; line-height: 20px; }
+.polaris-overview [data-slot='card-description'] { color: var(--muted); }
+.polaris-overview [data-slot='card-title'] a {
+  text-decoration: underline dotted #b5b5b5;
+  text-underline-offset: 4px;
+}
+.polaris-overview [data-slot='card-description'] { font-size: 12px; min-height: 36px; }
+.polaris-overview .card-value { font-size: 28px; line-height: 1.2; font-weight: 650; }
+.polaris-overview .card-delta-figure {
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: var(--hover-wash);
+}
+.polaris-overview .card-delta.up .card-delta-figure { background: #cdfee1; color: #0c5132; }
+.polaris-overview .card-delta.down .card-delta-figure { background: #fee9e8; color: #8e1f0b; }
+.polaris-dark .card-delta.up .card-delta-figure { background: #143e2b; color: #8ce9b5; }
+.polaris-dark .card-delta.down .card-delta-figure { background: #253044; color: #ffb4ab; }
+.polaris-overview .legend { min-height: 36px; }
+.polaris-overview .legend-item { font-size: 11px; }
+.polaris-overview .tooltip { box-shadow: 0 4px 16px rgb(0 0 0 / 12%); }
+.polaris-overview .footnote { text-align: center; }
+
+@media (max-width: 1200px) {
+  .polaris-overview .card-grid > :is(s-section, .polaris-panel) { grid-column: span 3; }
+}
+@media (max-width: 760px) {
+  .polaris-overview .main { padding: 20px 16px 32px; }
+  .polaris-overview .card-grid > :is(s-section, .polaris-panel) { grid-column: span 6; }
+  .polaris-intro { align-items: flex-start; }
+  .polaris-overview .controls .control { flex: 1 1 180px; }
+  .polaris-overview .control > button { width: 100%; }
+}
+
+.polaris-overview .card-grid > .full,
+.polaris-overview .card-grid > [data-full='true'] {
+  grid-column: 1 / -1;
 }

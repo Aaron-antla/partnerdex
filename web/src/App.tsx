@@ -306,6 +306,15 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [theme, toggleTheme] = useTheme();
+  const isOverview = page.id === 'overview' && !isMetricCustomers;
+
+  useEffect(() => {
+    if (document.querySelector('script[data-polaris]')) return;
+    const script = document.createElement('script');
+    script.src = 'https://cdn.shopify.com/shopifycloud/polaris-2.js';
+    script.dataset.polaris = 'true';
+    document.head.append(script);
+  }, []);
 
   useEffect(() => {
     fetchApps()
@@ -459,7 +468,7 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
 
   return (
     <TooltipProvider>
-    <SidebarProvider className="min-h-svh">
+    <SidebarProvider className={`min-h-svh polaris-overview polaris-${theme}`}>
       <AppSidebar current={page.id} onLogout={onLogout} />
       <SidebarInset>
       <main className="main">
@@ -481,6 +490,15 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
             <ThemeToggle theme={theme} onToggle={toggleTheme} />
           </div>
         </header>
+
+        {isOverview ? (
+          <div className="polaris-intro">
+            <div>
+              <h2>Business overview</h2>
+              <p>Track revenue, subscribers, and trials across your apps.</p>
+            </div>
+          </div>
+        ) : null}
 
         {/* Which filters a page shows is declared on the page, because they are
             not universally meaningful: trials say nothing about a listing, and
@@ -701,6 +719,7 @@ function Dashboard({ onLogout }: { onLogout?: () => void }) {
                 key={`${page.id}:${card.metric}`}
                 spec={card}
                 metric={overview[card.metric]}
+                theme={theme}
                 href={
                   customerFilterFor(card.metric) ? `#/${page.id}/${card.metric}` : undefined
                 }

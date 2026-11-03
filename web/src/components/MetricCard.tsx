@@ -35,11 +35,13 @@ export function MetricCard({
   spec,
   metric,
   href,
+  theme,
 }: {
   spec: CardSpec;
   metric: MetricResponse | undefined;
   /** Opens the merchants in this figure. Absent when the metric is not a population. */
   href?: string;
+  theme: 'light' | 'dark';
 }) {
   const isTable = spec.plot === 'table';
   const breakdown = spec.breakdown || isTable ? metric?.series ?? [] : [];
@@ -138,7 +140,7 @@ export function MetricCard({
       />
     );
 
-  return (
+  const card = (
     <Card className={spec.full ? 'card full' : 'card'}>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
@@ -166,6 +168,13 @@ export function MetricCard({
       </CardContent>
     </Card>
   );
+
+  // Polaris chooses its appearance from Shopify's host, not our local theme.
+  // Use a matching native surface for standalone dark mode.
+  if (theme === 'dark') {
+    return <section className={spec.full ? 'polaris-panel full' : 'polaris-panel'} aria-label={spec.label}>{card}</section>;
+  }
+  return <s-section data-full={spec.full ? 'true' : undefined} accessibilityLabel={spec.label}>{card}</s-section>;
 }
 
 /**

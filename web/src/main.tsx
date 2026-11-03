@@ -1,5 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import type {} from '@shopify/polaris-types';
 // Bundled rather than fetched: a self-hosted dashboard should not have its
 // typography depend on reaching a font CDN.
 import '@fontsource-variable/inter';
