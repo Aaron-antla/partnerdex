@@ -25,12 +25,9 @@ import { formatBucketDate, formatFullDate } from '../format';
  */
 
 const STEP_STORAGE_KEY = 'partnerdex:funnel-steps';
-const VIEW_STORAGE_KEY = 'partnerdex:funnel-view';
 
 /** A funnel needs two points to have a conversion at all. */
 const MIN_STEPS = 2;
-
-type ViewMode = 'table' | 'chart';
 
 const NUMBER = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 
@@ -108,26 +105,15 @@ function Conversion({ value, from }: { value: number | null; from: string }) {
 
 /* ------------------------------------------------------------- step picker */
 
-/**
- * Everything about how the funnel is drawn, behind one control.
- *
- * The view switch used to sit out on the headline card, where it competed with
- * the one number that card exists to show. It is the same kind of choice as
- * which steps to include — a setting, not a finding — so both live here, at the
- * top right of the card they actually change.
- */
+/** Which steps the funnel includes, behind one control on the chart card. */
 function FunnelSettings({
   steps,
   included,
   onToggle,
-  view,
-  onView,
 }: {
   steps: FunnelResponse['steps'];
   included: string[];
   onToggle: (key: string) => void;
-  view: ViewMode;
-  onView: (next: ViewMode) => void;
 }) {
   const [open, setOpen] = useState(false);
   const holder = useRef<HTMLDivElement>(null);
@@ -180,34 +166,17 @@ function FunnelSettings({
 
       {open ? (
         <div className="funnel-settings-panel" role="group" aria-label="Funnel settings">
-          <p className="funnel-settings-title">Show as</p>
-          <div className="funnel-views" role="group" aria-label="How to show the funnel">
-            <button
-              type="button"
-              className={view === 'table' ? 'active' : undefined}
-              aria-pressed={view === 'table'}
-              onClick={() => onView('table')}
-            >
-              Table
-            </button>
-            <button
-              type="button"
-              className={view === 'chart' ? 'active' : undefined}
-              aria-pressed={view === 'chart'}
-              onClick={() => onView('chart')}
-            >
-              Funnel
-            </button>
-          </div>
-
-          <p className="funnel-settings-title spaced">Steps shown</p>
+          <p className="funnel-settings-title">Steps shown</p>
           {steps.map((step) => {
             const on = included.includes(step.key);
             // The last two cannot be unchecked: a funnel with one step has no
             // conversion to report, and the headline figure would have no ends.
             const locked = on && included.length <= MIN_STEPS;
             return (
-              <label key={step.key} className={locked ? 'funnel-settings-row locked' : 'funnel-settings-row'}>
+              <label
+                key={step.key}
+                className={locked ? 'funnel-settings-row locked' : 'funnel-settings-row'}
+              >
                 <input
                   type="checkbox"
                   checked={on}
@@ -233,12 +202,15 @@ function FunnelSettings({
 /* -------------------------------------------------------------- the chart */
 
 /**
- * The whole range as one funnel.
+ * The whole range as one funnel, Mixpanel-style: one column per step, left to
+ * right.
  *
- * Ordered stages are ordinal, not categorical: one hue stepping in lightness,
- * so the order is visible in the colour and no stage claims an identity it does
- * not have. Bars are left-anchored rather than centred — a taper still reads as
- * a funnel, and a common baseline is what makes two lengths comparable.
+ * Bars share a baseline and scale against the widest measurable step, so an
+ * unmeasurable top does not collapse everything below it. Above each bar, a
+ * hatched ghost reaches up to the previous step's height — the people who
+ * dropped off there — and the chip in the gap between two columns is the
+ * step-over-step conversion. The figure over each bar is the share of the
+ * first shown step that got this far.
  */
 function FunnelChart({
   steps,
@@ -249,51 +221,82 @@ function FunnelChart({
   counts: Array<number | null>;
   conversions: Array<number | null>;
 }) {
-  // Scaled against the widest measurable step, so an unmeasurable top does not
-  // collapse everything below it to a sliver.
   const widest = Math.max(...counts.map((value) => value ?? 0), 1);
+  const height = (value: number | null) => (value === null ? 0 : (value / widest) * 100);
+  const first = counts[0] ?? null;
 
   return (
-    <ol className="funnel-chart">
+    <div
+      className="funnel-cols"
+      style={{ gridTemplateColumns: `repeat(${steps.length}, minmax(0, 1fr))` }}
+    >
+      <div className="funnel-cols-grid" aria-hidden="true">
+        {[100, 75, 50, 25, 0].map((line) => (
+          <div key={line} className="funnel-cols-gridline" style={{ bottom: `${line}%` }}>
+            <span>{NUMBER.format(Math.round((widest * line) / 100))}</span>
+          </div>
+        ))}
+      </div>
+
       {steps.map((step, index) => {
         const value = counts[index] ?? null;
-        const width = value === null ? 0 : Math.max((value / widest) * 100, value > 0 ? 1.5 : 0);
-        return (
-          <li className="funnel-bar-row" key={step.key}>
-            <div className="funnel-bar-label">
-              <span className="funnel-step-index">{index + 1}</span>
-              <span className="funnel-step-label">{step.label}</span>
-              <span className={`pill funnel-source-${step.source}`}>
-                {step.source === 'bigquery' ? 'GA4' : 'Partner'}
-              </span>
-            </div>
+        const previous = index === 0 ? null : (counts[index - 1] ?? null);
+        const ghost =
+          previous !== null && value !== null && previous > value ? height(previous) : 0;
+        const overall =
+          index === 0 || value === null || first === null || first === 0
+            ? null
+            : Math.round((value / first) * 10000) / 100;
 
-            <div className="funnel-bar-track">
+        return (
+          <div className="funnel-col" key={step.key}>
+            <div className="funnel-col-plot">
+              {ghost > 0 ? (
+                <div
+                  className="funnel-col-ghost"
+                  style={{ height: `${ghost}%` }}
+                  title={`${NUMBER.format(previous! - value!)} dropped off after “${steps[index - 1]!.label}”`}
+                />
+              ) : null}
               {value === null ? (
                 <span className="funnel-bar-absent">Not measured</span>
               ) : (
                 <div
-                  className="funnel-bar"
+                  className="funnel-col-bar"
                   style={{
-                    width: `${width}%`,
-                    // Ordinal ramp: step 1 is the anchor end of one hue.
+                    height: `${Math.max(height(value), value > 0 ? 1 : 0)}%`,
                     background: `var(--funnel-${Math.min(index + 1, 5)})`,
                   }}
                   title={`${step.label}: ${NUMBER.format(value)} ${step.unit}s`}
-                />
+                >
+                  <span className="funnel-col-value">
+                    {index === 0 ? '100%' : overall === null ? '—' : rate(overall)}
+                  </span>
+                </div>
               )}
-              <span className="funnel-bar-value">{count(value)}</span>
+              {index === 0 ? null : (
+                <div className="funnel-col-step-conv">
+                  <Conversion value={conversions[index] ?? null} from={steps[index - 1]!.label} />
+                </div>
+              )}
             </div>
 
-            <div className="funnel-bar-conv">
-              {index === 0 ? null : (
-                <Conversion value={conversions[index] ?? null} from={steps[index - 1]!.label} />
-              )}
+            <div className="funnel-col-label">
+              <div className="funnel-col-name" title={step.label}>
+                <span className="funnel-step-index">{index + 1}</span>
+                <span className="funnel-step-label">{step.label}</span>
+              </div>
+              <div className="funnel-col-meta">
+                <span className="funnel-col-count">{count(value)}</span>
+                <span className={`pill funnel-source-${step.source}`}>
+                  {step.source === 'bigquery' ? 'GA4' : 'Partner'}
+                </span>
+              </div>
             </div>
-          </li>
+          </div>
         );
       })}
-    </ol>
+    </div>
   );
 }
 
@@ -325,15 +328,6 @@ export function Funnel({
     }
   });
 
-  const [view, setView] = useState<ViewMode>(() =>
-    window.localStorage.getItem(VIEW_STORAGE_KEY) === 'chart' ? 'chart' : 'table',
-  );
-
-  const changeView = useCallback((next: ViewMode) => {
-    setView(next);
-    window.localStorage.setItem(VIEW_STORAGE_KEY, next);
-  }, []);
-
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -358,9 +352,7 @@ export function Funnel({
     (key: string) => {
       setIncluded((current) => {
         const base = current ?? data?.steps.map((step) => step.key) ?? [];
-        const next = base.includes(key)
-          ? base.filter((entry) => entry !== key)
-          : [...base, key];
+        const next = base.includes(key) ? base.filter((entry) => entry !== key) : [...base, key];
         if (next.length < MIN_STEPS) return base;
         // Kept in the funnel's own order rather than in click order — the steps
         // are a sequence, and a reordered one would be a different report.
@@ -429,112 +421,110 @@ export function Funnel({
               : `${count(first)} → ${count(last)} · ${formatFullDate(data.periodStart)} – ${formatFullDate(data.periodEnd)}`}
           </span>
         </div>
+      </div>
 
+      {/* The shape first, as columns left to right; the per-period matrix under
+          it, the way Mixpanel puts its breakdown table under the chart. */}
+      <div className={loading ? 'card full funnel-card stale' : 'card full funnel-card'}>
+        <div className="card-head">
+          <span className="card-label">Whole range</span>
+          <FunnelSettings steps={data.steps} included={steps.map((s) => s.key)} onToggle={toggle} />
+        </div>
+        <FunnelChart steps={steps} counts={totals} conversions={totalConversions} />
       </div>
 
       <div className={loading ? 'card full funnel-card stale' : 'card full funnel-card'}>
-        {/* One head, one settings control, whichever way the data is drawn. */}
         <div className="card-head">
-          <span className="card-label">{view === 'chart' ? 'Whole range' : 'By period'}</span>
-          <FunnelSettings
-            steps={data.steps}
-            included={steps.map((s) => s.key)}
-            onToggle={toggle}
-            view={view}
-            onView={changeView}
-          />
+          <span className="card-label">By period</span>
         </div>
 
-        {view === 'chart' ? (
-          <FunnelChart steps={steps} counts={totals} conversions={totalConversions} />
-        ) : (
-          <div className="funnel-scroll">
-            <table className="funnel-table">
-              <caption className="sr-only">
-                Funnel steps by {data.granularity.replace(/_/g, ' ')}
-              </caption>
-              <colgroup>
-                <col className="funnel-col-step" />
-                <col className="funnel-col-total" />
+        <div className="funnel-scroll">
+          <table className="funnel-table">
+            <caption className="sr-only">
+              Funnel steps by {data.granularity.replace(/_/g, ' ')}
+            </caption>
+            <colgroup>
+              <col className="funnel-col-step" />
+              <col className="funnel-col-total" />
+              {columns.map((bucket) => (
+                <col key={bucket.periodStart} className="funnel-col-bucket" />
+              ))}
+            </colgroup>
+
+            <thead>
+              <tr>
+                <th scope="col" className="funnel-cell-step">
+                  Step
+                </th>
+                <th scope="col" className="funnel-cell-total">
+                  Total
+                </th>
                 {columns.map((bucket) => (
-                  <col key={bucket.periodStart} className="funnel-col-bucket" />
+                  <th
+                    scope="col"
+                    key={bucket.periodStart}
+                    className={bucket.provisional ? 'provisional' : undefined}
+                    title={
+                      bucket.provisional
+                        ? 'Still filling — trials started here have not all decided yet.'
+                        : undefined
+                    }
+                  >
+                    {columnLabel(bucket, data.granularity, data.timeSeriesInterval)}
+                  </th>
                 ))}
-              </colgroup>
+              </tr>
+            </thead>
 
-              <thead>
-                <tr>
-                  <th scope="col" className="funnel-cell-step">
-                    Step
-                  </th>
-                  <th scope="col" className="funnel-cell-total">
-                    Total
-                  </th>
-                  {columns.map((bucket) => (
-                    <th
-                      scope="col"
-                      key={bucket.periodStart}
-                      className={bucket.provisional ? 'provisional' : undefined}
-                      title={
-                        bucket.provisional
-                          ? 'Still filling — trials started here have not all decided yet.'
-                          : undefined
-                      }
-                    >
-                      {columnLabel(bucket, data.granularity, data.timeSeriesInterval)}
+            <tbody>
+              {steps.map((step, position) => {
+                const stepIndex = shown[position]!;
+
+                return (
+                  <tr key={step.key}>
+                    <th scope="row" className="funnel-cell-step">
+                      <span className="funnel-step-index">{position + 1}</span>
+                      <span className="funnel-step-label">{step.label}</span>
+                      <span className={`pill funnel-source-${step.source}`}>
+                        {step.source === 'bigquery' ? 'GA4' : 'Partner'}
+                      </span>
                     </th>
-                  ))}
-                </tr>
-              </thead>
 
-              <tbody>
-                {steps.map((step, position) => {
-                  const stepIndex = shown[position]!;
+                    <td className="funnel-cell-total">
+                      <span className="funnel-count">{count(totals[position] ?? null)}</span>
+                      {position === 0 ? null : (
+                        <Conversion
+                          value={totalConversions[position] ?? null}
+                          from={steps[position - 1]!.label}
+                        />
+                      )}
+                    </td>
 
-                  return (
-                    <tr key={step.key}>
-                      <th scope="row" className="funnel-cell-step">
-                        <span className="funnel-step-index">{position + 1}</span>
-                        <span className="funnel-step-label">{step.label}</span>
-                        <span className={`pill funnel-source-${step.source}`}>
-                          {step.source === 'bigquery' ? 'GA4' : 'Partner'}
-                        </span>
-                      </th>
+                    {columns.map((bucket) => {
+                      const cell = conversionsFor(bucket.counts, shown);
+                      return (
+                        <td
+                          key={bucket.periodStart}
+                          className={bucket.provisional ? 'provisional' : undefined}
+                        >
+                          <span className="funnel-count">
+                            {count(bucket.counts[stepIndex] ?? null)}
+                          </span>
+                          {position === 0 ? null : (
+                            <Conversion
+                              value={cell[position] ?? null}
+                              from={steps[position - 1]!.label}
+                            />
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
 
-                      <td className="funnel-cell-total">
-                        <span className="funnel-count">{count(totals[position] ?? null)}</span>
-                        {position === 0 ? null : (
-                          <Conversion
-                            value={totalConversions[position] ?? null}
-                            from={steps[position - 1]!.label}
-                          />
-                        )}
-                      </td>
-
-                      {columns.map((bucket) => {
-                        const cell = conversionsFor(bucket.counts, shown);
-                        return (
-                          <td
-                            key={bucket.periodStart}
-                            className={bucket.provisional ? 'provisional' : undefined}
-                          >
-                            <span className="funnel-count">
-                              {count(bucket.counts[stepIndex] ?? null)}
-                            </span>
-                            {position === 0 ? null : (
-                              <Conversion
-                                value={cell[position] ?? null}
-                                from={steps[position - 1]!.label}
-                              />
-                            )}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                })}
-              </tbody>
-
-              {/*
+            {/*
                 The bottom line, per column.
 
                 Every rate above it is against the step before, so reading the
@@ -544,59 +534,58 @@ export function Funnel({
                 body row because it is not a step: nothing converts *into* it,
                 and the row heading names a span rather than an event.
               */}
-              <tfoot>
-                <tr className="funnel-final">
-                  <th scope="row" className="funnel-cell-step">
-                    <span className="funnel-step-label">Final conversion</span>
-                    <span className="funnel-final-span">
-                      {steps[0]!.label} → {steps[steps.length - 1]!.label}
-                    </span>
-                  </th>
+            <tfoot>
+              <tr className="funnel-final">
+                <th scope="row" className="funnel-cell-step">
+                  <span className="funnel-step-label">Final conversion</span>
+                  <span className="funnel-final-span">
+                    {steps[0]!.label} → {steps[steps.length - 1]!.label}
+                  </span>
+                </th>
 
-                  <td className="funnel-cell-total">
-                    {/* The same figure the headline card leads with, rounded to
+                <td className="funnel-cell-total">
+                  {/* The same figure the headline card leads with, rounded to
                         the table's precision. The exact rate is on the title,
                         so the two never look like different numbers without a
                         way to reconcile them. */}
-                    <span
-                      className={
-                        headline === null ? 'funnel-final-value empty' : 'funnel-final-value'
-                      }
-                      title={headline === null ? undefined : `${headline}% across the whole range`}
-                    >
-                      {headline === null ? '—' : rate(headline)}
-                    </span>
-                  </td>
+                  <span
+                    className={
+                      headline === null ? 'funnel-final-value empty' : 'funnel-final-value'
+                    }
+                    title={headline === null ? undefined : `${headline}% across the whole range`}
+                  >
+                    {headline === null ? '—' : rate(headline)}
+                  </span>
+                </td>
 
-                  {columns.map((bucket) => {
-                    const value = endToEnd(bucket.counts, shown);
-                    return (
-                      <td
-                        key={bucket.periodStart}
-                        className={bucket.provisional ? 'provisional' : undefined}
+                {columns.map((bucket) => {
+                  const value = endToEnd(bucket.counts, shown);
+                  return (
+                    <td
+                      key={bucket.periodStart}
+                      className={bucket.provisional ? 'provisional' : undefined}
+                    >
+                      <span
+                        className={
+                          value === null ? 'funnel-final-value empty' : 'funnel-final-value'
+                        }
+                        title={
+                          value === null
+                            ? undefined
+                            : `${value}% of “${steps[0]!.label}” reached “${
+                                steps[steps.length - 1]!.label
+                              }”`
+                        }
                       >
-                        <span
-                          className={
-                            value === null ? 'funnel-final-value empty' : 'funnel-final-value'
-                          }
-                          title={
-                            value === null
-                              ? undefined
-                              : `${value}% of “${steps[0]!.label}” reached “${
-                                  steps[steps.length - 1]!.label
-                                }”`
-                          }
-                        >
-                          {value === null ? '—' : rate(value)}
-                        </span>
-                      </td>
-                    );
-                  })}
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        )}
+                        {value === null ? '—' : rate(value)}
+                      </span>
+                    </td>
+                  );
+                })}
+              </tr>
+            </tfoot>
+          </table>
+        </div>
       </div>
 
       {/* Said under the figures rather than over them: a reader who has already

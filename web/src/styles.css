@@ -2801,77 +2801,167 @@ button.primary:disabled,
 
 /* --- the chart ------------------------------------------------------------ */
 
-.funnel-chart {
-  list-style: none;
-  margin: 4px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.funnel-bar-row {
+/*
+ * Mixpanel-style columns: one per step, left to right, on a shared baseline.
+ * The plot is a fixed height so the gridlines (one absolute layer) and every
+ * column's bars measure their percentages against the same box.
+ */
+.funnel-cols {
+  --funnel-plot-h: 260px;
+  position: relative;
   display: grid;
-  grid-template-columns: 232px minmax(0, 1fr) 92px;
-  align-items: center;
-  gap: 16px;
-  padding: 8px 6px;
-  border-radius: 8px;
+  /* Room above the tallest bar for its percentage label. */
+  margin: 36px 0 4px;
+  padding-left: 44px;
 }
 
-.funnel-bar-row:hover {
-  background: var(--hover-wash);
+.funnel-cols-grid {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--funnel-plot-h);
+  pointer-events: none;
 }
 
-.funnel-bar-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.funnel-cols-gridline {
+  position: absolute;
+  left: 44px;
+  right: 0;
+  border-top: 1px dashed var(--border);
+}
+
+.funnel-cols-gridline:last-child {
+  border-top-style: solid;
+}
+
+.funnel-cols-gridline span {
+  position: absolute;
+  right: calc(100% + 8px);
+  transform: translateY(-50%);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.funnel-col {
   min-width: 0;
 }
 
-.funnel-bar-label .funnel-step-label {
+.funnel-col-plot {
+  position: relative;
+  height: var(--funnel-plot-h);
+}
+
+.funnel-col-bar,
+.funnel-col-ghost {
+  position: absolute;
+  bottom: 0;
+  left: 20%;
+  right: 20%;
+  border-radius: 4px 4px 0 0;
+}
+
+.funnel-col-bar {
+  transition: height 160ms ease;
+}
+
+/* The people who dropped off since the previous step: same footprint, hatched. */
+.funnel-col-ghost {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--hover-wash) 0 6px,
+    transparent 6px 12px
+  );
+  border: 1px dashed var(--border);
+  border-bottom: 0;
+}
+
+.funnel-col-value {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.funnel-col-plot > .funnel-bar-absent {
+  position: absolute;
+  bottom: 8px;
+  left: 0;
+  right: 0;
+  text-align: center;
+}
+
+/* Step-over-step conversion, in the gap between this column and the last. */
+.funnel-col-step-conv {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translate(-50%, -50%);
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-1);
+  white-space: nowrap;
+}
+
+.funnel-col-step-conv .funnel-conv {
+  display: inline;
+  margin: 0;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.funnel-col-step-conv::before {
+  content: '→ ';
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.funnel-col-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px 0;
+  text-align: center;
+}
+
+.funnel-col-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 13px;
+}
+
+.funnel-col-name .funnel-step-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.funnel-bar-track {
+.funnel-col-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-width: 0;
+  gap: 6px;
 }
 
-/* 4px rounded data end, anchored to a common left baseline: the taper is what
-   reads as a funnel, and a shared baseline is what makes two lengths
-   comparable. */
-.funnel-bar {
-  height: 26px;
-  min-width: 3px;
-  border-radius: 3px 4px 4px 3px;
-  transition: width 160ms ease;
-}
-
-.funnel-bar-value {
-  flex: 0 0 auto;
+.funnel-col-count {
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text-secondary);
 }
 
 .funnel-bar-absent {
   font-size: 12px;
   color: var(--muted);
-}
-
-.funnel-bar-conv {
-  text-align: right;
-}
-
-.funnel-bar-conv .funnel-conv {
-  margin-top: 0;
 }
 
 /* --- notes ---------------------------------------------------------------- */
@@ -2892,13 +2982,18 @@ button.primary:disabled,
     font-size: 38px;
   }
 
-  .funnel-bar-row {
-    grid-template-columns: 1fr;
-    gap: 6px;
+  .funnel-cols {
+    --funnel-plot-h: 200px;
   }
 
-  .funnel-bar-conv {
-    text-align: left;
+  .funnel-col-bar,
+  .funnel-col-ghost {
+    left: 28%;
+    right: 28%;
+  }
+
+  .funnel-col-meta .pill {
+    display: none;
   }
 }
 .notice.warn {
@@ -3043,21 +3138,6 @@ button.primary:disabled,
   flex: 0 0 auto;
 }
 
-/* The view switch sits inside the settings panel now, so it fills its width
-   rather than hugging its label out on the headline card. */
-.funnel-settings-panel .funnel-views {
-  width: 100%;
-  margin-bottom: 4px;
-}
-
-.funnel-settings-panel .funnel-views button {
-  flex: 1 1 0;
-}
-
-/* A second heading inside the panel needs air above it; the first does not. */
-.funnel-settings-title.spaced {
-  margin-top: 14px;
-}
 /*
  ---break---
  */
