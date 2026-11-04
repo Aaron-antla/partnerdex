@@ -1,0 +1,62 @@
+# Production is Fly (`partnerdex-antla`), not the Cloudflare Worker.
+# Merging to main is go-live: CI must pass, then this job rebuilds the
+# Docker image and rolls the single machine that holds /data.
+#
+# fly.toml stays gitignored — it carries Partner API credentials. The
+# job pulls the live app config (region, volume, [env], machine flags)
+# so we never guess a region and attach a second empty SQLite.
+name: Fly Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time. Do not cancel a live Fly deploy: the volume
+# attaches to a single machine, and a killed swap can leave it mid-replace.
+concurrency:
+  group: fly-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: partnerdex-antla
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_APP: partnerdex-antla
+
+    steps:
+      - name: Require FLY_API_TOKEN
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::error::Add a repository Actions secret named FLY_API_TOKEN. Create it with: fly tokens create deploy -x 999999h -a partnerdex-antla"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # Writes ./fly.toml from the running app. Do not cat that file —
+      # [env] may include PARTNER_API_TOKEN when credentials were set
+      # in fly.toml rather than `fly secrets`.
+      - name: Save live Fly config
+        run: flyctl config save --app "$FLY_APP" --yes
+
+      # --ha=false: never create a second machine. Two machines would
+      # each want the volume and would double-sync the Partner API.
+      - name: Deploy
+        run: flyctl deploy --remote-only --ha=false --app "$FLY_APP"
+
+      - name: Health
+        run: curl -fsS --retry 8 --retry-delay 3 --retry-all-errors "https://${FLY_APP}.fly.dev/api/health"
