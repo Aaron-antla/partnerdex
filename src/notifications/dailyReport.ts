@@ -12,7 +12,7 @@ import {
   type MrrLine,
 } from './mrrMovement.js';
 import { narrateMrrChange } from './narrate.js';
-import { formatMoney, type SlackMessage } from './slack.js';
+import { escapeMrkdwn, formatMoney, shopLink, type SlackMessage } from './slack.js';
 
 export interface DailyLevel {
   value: number;
@@ -271,12 +271,32 @@ export function collectDailySnapshot(db: Db, now: Date): DailyReport {
 export async function prepareDailyReport(db: Db, now: Date): Promise<DailyReport> {
   const report = collectDailySnapshot(db, now);
   if (report.snapshot.mrrWhy) {
-    report.snapshot.mrrWhy.summary = await narrateMrrChange(
-      report.attribution,
-      report.snapshot.currency,
-    );
+    const summary = await narrateMrrChange(report.attribution, report.snapshot.currency);
+    report.snapshot.mrrWhy.summary = summary && linkShops(summary, report.attribution.items);
   }
   return report;
+}
+
+/** The sentence as mrkdwn, with each store it names linked like the lines below it. */
+function linkShops(text: string, items: MrrAttribution['items']): string {
+  // A name two stores share links nowhere rather than to the wrong one.
+  const domains = new Map<string, string | null>();
+  for (const item of items) {
+    domains.set(item.shop, domains.has(item.shop) && domains.get(item.shop) !== item.domain ? null : item.domain);
+  }
+  const names = [...domains.keys()]
+    .sort((a, b) => b.length - a.length)
+    .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (names.length === 0) return escapeMrkdwn(text);
+
+  const pattern = new RegExp(`(?<![\\p{L}\\p{N}])(?:${names.join('|')})(?![\\p{L}\\p{N}])`, 'gu');
+  let linked = '';
+  let last = 0;
+  for (const match of text.matchAll(pattern)) {
+    linked += escapeMrkdwn(text.slice(last, match.index)) + shopLink(match[0], domains.get(match[0]) ?? null);
+    last = match.index + match[0].length;
+  }
+  return linked + escapeMrkdwn(text.slice(last));
 }
 
 const CAUSE_LABELS: Record<MrrCause, [string, string]> = {
@@ -322,7 +342,7 @@ function describeMrrChange(
       const [one, many] = CAUSE_LABELS[cause];
       const shops = items
         .slice(0, SHOPS_PER_LINE)
-        .map((item) => `${item.shop} (${item.plan ? `${item.plan}, ` : ''}${signed(item.delta, money)})`);
+        .map((item) => `${shopLink(item.shop, item.domain)} (${item.plan ? `${item.plan}, ` : ''}${signed(item.delta, money)})`);
       if (items.length > SHOPS_PER_LINE) shops.push(`${items.length - SHOPS_PER_LINE} more`);
       const neverPaid =
         LOSSES.has(cause) && items.every((item) => item.neverPaid)

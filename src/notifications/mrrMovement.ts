@@ -93,7 +93,11 @@ export interface MrrItem {
   cause: MrrCause;
   /** Corrects yesterday's posted figure (late data), rather than happening since. */
   restated: boolean;
+  shopId: string;
+  /** The store's name from the Partner API, else its domain. */
   shop: string;
+  /** The myshopify domain, for linking to the store. */
+  domain: string | null;
   app: string;
   plan: string | null;
   delta: number;
@@ -299,14 +303,15 @@ function whyAdded(
   return { cause: 'other', evidence: [] };
 }
 
-function labels(db: Db, appId: string, shopId: string): { shop: string; app: string } {
+function labels(db: Db, appId: string, shopId: string): { shop: string; domain: string | null; app: string } {
   const row = db
     .prepare(
-      `SELECT (SELECT COALESCE(myshopify_domain, name) FROM shops WHERE id = @shopId) AS shop,
+      `SELECT (SELECT NULLIF(TRIM(name), '') FROM shops WHERE id = @shopId) AS name,
+              (SELECT myshopify_domain FROM shops WHERE id = @shopId) AS domain,
               (SELECT name FROM apps WHERE id = @appId) AS app`,
     )
-    .get({ appId, shopId }) as { shop: string | null; app: string | null };
-  return { shop: row.shop ?? shopId, app: row.app ?? appId };
+    .get({ appId, shopId }) as { name: string | null; domain: string | null; app: string | null };
+  return { shop: row.name ?? row.domain ?? shopId, domain: row.domain, app: row.app ?? appId };
 }
 
 function diff(
@@ -327,14 +332,16 @@ function diff(
     const delta = round((now?.amount ?? 0) - (old?.amount ?? 0));
     if (delta === 0) continue;
     const line = (now ?? old)!;
-    const { shop, app } = labels(db, line.appId, line.shopId);
+    const { shop, domain, app } = labels(db, line.appId, line.shopId);
     const restated = since === null;
 
     if (key.startsWith('usage:')) {
       items.push({
         cause: 'usage',
         restated,
+        shopId: line.shopId,
         shop,
+        domain,
         app,
         plan: null,
         delta,
@@ -362,7 +369,9 @@ function diff(
     items.push({
       ...why,
       restated,
+      shopId: line.shopId,
       shop,
+      domain,
       app,
       plan: line.planName,
       delta,
@@ -380,7 +389,8 @@ function diff(
       merged.push(item);
       continue;
     }
-    const key = `${item.app} ${item.shop}`;
+    // By id: two stores can share a name.
+    const key = `${item.app} ${item.shopId}`;
     const existing = changes.get(key);
     if (!existing) {
       changes.set(key, item);

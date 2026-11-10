@@ -871,7 +871,7 @@ describe('daily report', () => {
       (sent[0]!.blocks[2] as { text: { text: string } }).text.text,
       [
         '*Why MRR moved* · vs $58.00, yesterday as recomputed today',
-        '• +$19.99 · 1 new paid subscription: s3.example (Plan, +$19.99)',
+        '• +$19.99 · 1 new paid subscription: <https://s3.example|Shop 3> (Plan, +$19.99)',
       ].join('\n'),
     );
   });
@@ -1036,11 +1036,11 @@ describe('why MRR moved', () => {
       whyText(sent[1]!),
       [
         '*Why MRR moved* · vs $316.00 posted yesterday',
-        '• −$199.00 · 1 charge frozen by Shopify: s2.example (Plan, −$199.00)',
-        '• +$19.99 · 1 new paid subscription: s4.example (Plan, +$19.99)',
+        '• −$199.00 · 1 charge frozen by Shopify: <https://s2.example|Shop 2> (Plan, −$199.00)',
+        '• +$19.99 · 1 new paid subscription: <https://s4.example|Shop 4> (Plan, +$19.99)',
         "_Yesterday's posted figure was corrected by Shopify data that arrived after it was sent:_",
-        '• −$49.00 · 1 charge frozen by Shopify — never paid: s3.example (Plan, −$49.00)',
-        '• −$39.00 · 1 cancellation: s5.example (Plan, −$39.00)',
+        '• −$49.00 · 1 charge frozen by Shopify — never paid: <https://s3.example|Shop 3> (Plan, −$49.00)',
+        '• −$39.00 · 1 cancellation: <https://s5.example|Shop 5> (Plan, −$39.00)',
       ].join('\n'),
     );
   });
@@ -1055,19 +1055,19 @@ describe('why MRR moved', () => {
     const byShop = new Map(attribution.items.map((item) => [item.shop, item]));
 
     assert.equal(attribution.unexplained, 0);
-    assert.deepEqual(byShop.get('s3.example')!.evidence, [
+    assert.deepEqual(byShop.get('Shop 3')!.evidence, [
       'Shopify froze the charge Feb 29, 22:00',
       'frozen before its billing date of Mar 1, 2024',
       'no payment has ever settled on this charge',
     ]);
-    assert.equal(byShop.get('s3.example')!.restated, true);
-    assert.deepEqual(byShop.get('s2.example')!.evidence, [
+    assert.equal(byShop.get('Shop 3')!.restated, true);
+    assert.deepEqual(byShop.get('Shop 2')!.evidence, [
       'Shopify froze the charge Mar 3, 12:00',
       'frozen before its billing date of Mar 5, 2024',
       'last payment settled Feb 5, 02:00',
     ]);
-    assert.equal(byShop.get('s2.example')!.restated, false);
-    assert.deepEqual(byShop.get('s5.example')!.evidence, [
+    assert.equal(byShop.get('Shop 2')!.restated, false);
+    assert.deepEqual(byShop.get('Shop 5')!.evidence, [
       'subscription canceled Mar 2, 12:00',
       'last payment settled Feb 10, 02:00',
     ]);
@@ -1075,7 +1075,7 @@ describe('why MRR moved', () => {
     // Charged at activation with no settled sale: counted as paid, and the
     // cause must not claim a billing date passed.
     seed([{ chargeRef: 'upfront', shopId: '6', amount: 29, activatedAt: '2024-03-03T09:00:00Z', billingOn: '2024-04-02T09:00:00Z' }]);
-    const upfront = collectDailySnapshot(db, NEXT_REPORT_AT).attribution.items.find((item) => item.shop === 's6.example')!;
+    const upfront = collectDailySnapshot(db, NEXT_REPORT_AT).attribution.items.find((item) => item.shop === 'Shop 6')!;
     assert.equal(upfront.cause, 'new_paid');
     assert.deepEqual(upfront.evidence, [
       'activated Mar 3, 11:00',
@@ -1093,11 +1093,12 @@ describe('why MRR moved', () => {
     seedNextDay();
 
     const honest =
-      "MRR fell $267.01: s2.example's $199.00 charge was frozen by Shopify and 1 new paid subscription added $19.99. " +
+      "MRR fell $267.01: Shop 2's $199.00 charge was frozen by Shopify and 1 new paid subscription added $19.99. " +
       "Late Shopify data also corrected yesterday's figure: a $49.00 charge that never paid was frozen and a $39.00 subscription was canceled.";
     stubModel(honest);
     await dispatchPending(db, { now: NEXT_REPORT_AT });
-    assert.equal(whyText(sent[1]!).split('\n')[1], honest);
+    // The store the sentence names links to its storefront, like the lines below it.
+    assert.equal(whyText(sent[1]!).split('\n')[1], honest.replace('Shop 2', '<https://s2.example|Shop 2>'));
 
     // Same day, fresh database state, a reply that invents a cause.
     const { attribution } = collectDailySnapshot(db, NEXT_REPORT_AT);
@@ -1108,6 +1109,14 @@ describe('why MRR moved', () => {
     assert.match(rejectNarration('MRR fell $267.01 after a refund.', facts)!, /refund/);
     assert.match(rejectNarration('Three stores were frozen, costing $248.00.', facts)!, /248|three/);
     assert.match(rejectNarration('s9.myshopify.com was frozen.', facts)!, /s9\.myshopify\.com/);
+
+    // A store's own name is not a claim: neither "Uninstall" nor 7 in it may sink an honest sentence.
+    const renamed = {
+      ...facts,
+      shops: facts.shops.map((shop) => (shop.shop === 'Shop 2' ? { ...shop, shop: 'Uninstall Club 7' } : shop)),
+    };
+    assert.equal(rejectNarration("Uninstall Club 7's $199.00 charge was frozen by Shopify.", renamed), null);
+    assert.match(rejectNarration('7 stores uninstalled.', renamed)!, /7|uninstall/);
   });
 
   it('posts the facts alone when the model reply does not hold up', async () => {
@@ -1123,7 +1132,7 @@ describe('why MRR moved', () => {
 
     const lines = whyText(sent[1]!).split('\n');
     assert.equal(lines[0], '*Why MRR moved* · vs $316.00 posted yesterday');
-    assert.equal(lines[1], '• −$199.00 · 1 charge frozen by Shopify: s2.example (Plan, −$199.00)');
+    assert.equal(lines[1], '• −$199.00 · 1 charge frozen by Shopify: <https://s2.example|Shop 2> (Plan, −$199.00)');
     assert.equal(whyText(sent[1]!).includes('uninstalled'), false);
   });
 });

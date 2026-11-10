@@ -23,6 +23,7 @@ Rules:
 - Use only the JSON facts you are given. Never add a reason, store, plan, amount, date or count that is not in them.
 - Copy every money amount exactly as it appears in the facts, with its sign removed and a $ in front. Never round, add or subtract amounts yourself; when you need a total, use a "total" value from "groups".
 - Write counts as digits and take them from the "count" values in "groups". Never use number words such as "one" or "two", not even as pronouns; name the shop instead.
+- Refer to a store by its "shop" value, copied exactly. Never write a myshopify.com address.
 - Use the evidence strings to say what happened (for example frozen by Shopify, uninstalled, canceled, new paid subscription, no payment ever settled). Do not speculate beyond them. A "store_closed" cause means the merchant's store was closed or paused, not that they canceled.
 - Items with "correction_to_yesterday": true are not new events: Shopify data that arrived after yesterday's report changed yesterday's figure. Say so separately.
 - 1 or 2 sentences, under 300 characters, plain text, no bullet points, no markdown.`;
@@ -125,20 +126,28 @@ export function rejectNarration(text: string, facts: ReturnType<typeof narration
     if (!shops.has(domain)) return `the shop ${domain} is not in the facts`;
   }
 
-  const allowed = numbersIn(JSON.stringify(facts));
-  for (const value of numbersIn(text)) {
+  // A store's name is not a claim: "Cancel Club 7" must not read as a cancellation or a 7.
+  let claims = text;
+  for (const name of [...new Set(facts.shops.map((shop) => shop.shop))].sort((a, b) => b.length - a.length)) {
+    claims = claims.split(name).join(' ');
+  }
+
+  const allowed = numbersIn(
+    JSON.stringify({ ...facts, shops: facts.shops.map((shop) => ({ ...shop, shop: '' })) }),
+  );
+  for (const value of numbersIn(claims)) {
     if (!allowed.some((known) => Math.abs(known - value) < 0.005)) {
       return `the number ${value} is not in the facts`;
     }
   }
-  for (const word of text.toLowerCase().match(/\b[a-z]+\b/g) ?? []) {
+  for (const word of claims.toLowerCase().match(/\b[a-z]+\b/g) ?? []) {
     const value = NUMBER_WORDS[word];
     if (value !== undefined && !allowed.includes(value)) {
       return `"${word}" is not a count in the facts`;
     }
   }
 
-  let rest = text;
+  let rest = claims;
   for (const claim of CLAIMS) {
     if (claim.pattern.test(rest) && !claim.backed(facts)) {
       return `"${rest.match(claim.pattern)![0]}" is not backed by the facts`;

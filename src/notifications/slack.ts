@@ -101,6 +101,12 @@ export function shopHref(domain: string | null): string | null {
   return `https://${host}`;
 }
 
+/** The store's name as mrkdwn, linked to its storefront when the domain is known. */
+export function shopLink(name: string, domain: string | null): string {
+  const href = shopHref(domain);
+  return href ? `<${href}|${escapeMrkdwn(name)}>` : escapeMrkdwn(name);
+}
+
 function shopField(notice: SubscriptionNotice): { type: 'mrkdwn'; text: string } {
   const name = escapeMrkdwn(shopLabel(notice));
   const href = shopHref(notice.shopDomain);
@@ -110,7 +116,7 @@ function shopField(notice: SubscriptionNotice): { type: 'mrkdwn'; text: string }
 }
 
 /** Slack renders `<url|text>`; `*` and `_` in a merchant's name must not. */
-function escapeMrkdwn(text: string): string {
+export function escapeMrkdwn(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
