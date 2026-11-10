@@ -466,6 +466,41 @@ describe('reading billing_on correctly', () => {
     assert.equal(runMetric('trials', monthly, { now: NOW }).value, 0, 'not a trial');
   });
 
+  it('counts a negotiated plan only once a payment settles, whatever its billing date says', () => {
+    // A custom deal's free months are a discount the Partner API never shows:
+    // the billing date passes and nothing is billed.
+    seed([
+      {
+        chargeRef: '1',
+        shopId: '10',
+        amount: 2499.99,
+        planName: 'Unlimited Haute Couture-1e2d234e-ceec-489f-b406-ae4e83bb5eef',
+        activatedAt: '2024-03-05T16:37:32Z',
+        billingOn: '2024-03-14T00:00:00Z',
+      },
+      {
+        chargeRef: '2',
+        shopId: '11',
+        amount: 399.99,
+        planName: 'Custom-2000-7a383a73-802e-409c-93ae-66fcba1b65f1',
+        activatedAt: '2024-03-02T13:01:10Z',
+        billingOn: '2024-04-01T00:00:00Z',
+        firstSaleAt: '2024-05-20T00:00:00Z',
+      },
+      // A catalog plan past its billing date still reads as paid while the sale settles.
+      { chargeRef: '3', shopId: '12', amount: 29, activatedAt: '2024-03-05T10:00:00Z', billingOn: '2024-03-14T00:00:00Z' },
+    ]);
+
+    const mrr = runMetric('mrr', monthly, { now: NOW });
+    assert.equal(pointAt(mrr, '2024-04'), 29, 'neither negotiated plan has paid yet');
+    assert.equal(pointAt(mrr, '2024-05'), 428.99, 'the custom plan counts from its first payment');
+    assert.equal(runMetric('discounted_mrr', monthly, { now: NOW }).value, 399.99);
+
+    const customers = listCustomers({});
+    assert.equal(customers.customers.find((row) => row.shopId === '10')?.status, 'trialing');
+    assert.equal(customers.customers.find((row) => row.shopId === '10')?.mrr, 0);
+  });
+
   it('still reads a part-cycle billing date as a trial', () => {
     seed([
       {

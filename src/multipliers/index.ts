@@ -9,7 +9,7 @@ import {
 import { currencyProfile } from '../metrics/context.js';
 import type { Bucket } from '../metrics/time.js';
 import { isExcluded, readConnection, readSettings, type MultiplierSettings } from '../mixpanel/connection.js';
-import { PLAN_CHANGE_WINDOW_SECONDS } from '../sync/derive.js';
+import { isCustomPlan, PLAN_CHANGE_WINDOW_SECONDS } from '../sync/derive.js';
 import { resolveScopedAppIds } from '../sync/index.js';
 
 /**
@@ -162,8 +162,6 @@ export interface MultipliersReport {
   };
 }
 
-const UUID_TAIL = /-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * A charge's plan tier. Catalog plans are their own tier; unique and custom
  * charges (a UUID tail, or `Custom-…`) are negotiated and grouped together,
@@ -171,7 +169,7 @@ const UUID_TAIL = /-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
  */
 export function tierOf(planName: string | null): string {
   if (!planName) return 'Unnamed plan';
-  if (/^Custom-/i.test(planName) || UUID_TAIL.test(planName)) return 'Custom & negotiated';
+  if (isCustomPlan(planName)) return 'Custom & negotiated';
   return planName.trim();
 }
 
