@@ -1,7 +1,13 @@
 import { getConfig } from '../config.js';
 import { getDb, type Db } from '../db/index.js';
 import { resolveScopedAppIds } from '../sync/index.js';
-import { buildDailyReportMessage, collectDailySnapshot } from './dailyReport.js';
+import {
+  buildDailyReportMessage,
+  dueDailyReport,
+  prepareDailyReport,
+  readPostedSnapshot,
+  recordPostedReport,
+} from './dailyReport.js';
 import { listChannels, migrateLegacySubscriptionTopics, recordDeliveryOutcome, webhookUrlFor } from './store.js';
 import { buildMessage, postToSlack, type SubscriptionNotice } from './slack.js';
 import { DAILY_REPORT, topicByKey } from './topics.js';
@@ -515,8 +521,8 @@ async function dispatchChannel(
 
   if (!channel.topics.includes(DAILY_REPORT.key)) return;
 
-  const snapshot = collectDailySnapshot(db, now);
-  const eventId = `daily_report:${snapshot.reportDate}`;
+  const { reportDate } = dueDailyReport(now);
+  const eventId = `daily_report:${reportDate}`;
   const alreadyRecorded = db
     .prepare(
       `SELECT 1 FROM notification_deliveries
@@ -525,8 +531,14 @@ async function dispatchChannel(
     .get(channel.id, eventId);
   if (alreadyRecorded) return;
 
+  // A second channel gets the message the first one got, not a recomputation.
+  const posted = readPostedSnapshot(db, reportDate);
+  const fresh = posted ? null : await prepareDailyReport(db, now);
+  const snapshot = posted ?? fresh!.snapshot;
+
   const result = await postToSlack(url, buildDailyReportMessage(snapshot));
   if (result.ok) {
+    if (fresh) recordPostedReport(db, fresh, new Date());
     recordDelivery(db, channel.id, [eventId], true, null);
     recordDeliveryOutcome(channel.id, { at: new Date().toISOString(), error: null }, db);
     summary.sent += 1;

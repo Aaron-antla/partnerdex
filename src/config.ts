@@ -241,6 +241,14 @@ export interface Config {
     trustProxy: boolean;
   };
   reporting: ReportingDefaults;
+  /**
+   * The model that writes the one-sentence "why" under MRR in the daily
+   * report. No key means the report carries only the factual breakdown.
+   */
+  openRouter: {
+    apiKey: string | null;
+    model: string;
+  };
 }
 
 let cached: Config | null = null;
@@ -289,6 +297,10 @@ export function getConfig(): Config {
       trialMinGapDays: int('TRIAL_MIN_GAP_DAYS', 2),
       churnWindowDays: int('CHURN_WINDOW_DAYS', 30),
       churnOnUninstall: bool('CHURN_ON_UNINSTALL', true),
+    },
+    openRouter: {
+      apiKey: process.env.OPENROUTER_API_KEY?.trim() || null,
+      model: optional('OPENROUTER_MODEL', 'deepseek/deepseek-v4.1-flash'),
     },
   };
 

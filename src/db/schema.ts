@@ -520,6 +520,31 @@ CREATE TABLE IF NOT EXISTS metric_cache (
 
 CREATE INDEX IF NOT EXISTS idx_cache_expiry ON metric_cache (expires_at);
 
+-- The daily Slack report exactly as it was posted. Every stock metric is
+-- reconstructed on read, so a backdated cancel or freeze rewrites yesterday's
+-- figure; the next report compares against what people were actually told.
+-- \`snapshot\` is the DailySnapshot JSON, explanation included, so a second
+-- channel on the same day posts the identical message.
+CREATE TABLE IF NOT EXISTS daily_report_snapshots (
+  report_date TEXT PRIMARY KEY,
+  as_of       TEXT NOT NULL,
+  snapshot    TEXT NOT NULL,
+  posted_at   TEXT NOT NULL
+) WITHOUT ROWID;
+
+-- What made up the posted MRR, one row per subscription charge (line_key is
+-- the charge id) or per shop's trailing-30-day usage (\`usage:<app>:<shop>\`).
+-- The next report diffs against these rows to say which shops moved the number.
+CREATE TABLE IF NOT EXISTS daily_report_mrr_lines (
+  report_date TEXT NOT NULL,
+  line_key    TEXT NOT NULL,
+  app_id      TEXT NOT NULL,
+  shop_id     TEXT NOT NULL,
+  plan_name   TEXT,
+  amount      REAL NOT NULL,
+  PRIMARY KEY (report_date, line_key)
+) WITHOUT ROWID;
+
 -- Point-in-time copies of past time series, so a later run can prove that
 -- history did not silently move underneath us.
 CREATE TABLE IF NOT EXISTS drift_snapshots (

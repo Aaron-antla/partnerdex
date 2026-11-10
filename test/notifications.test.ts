@@ -10,6 +10,7 @@ import {
   type DailySnapshot,
 } from '../src/notifications/dailyReport.js';
 import { dispatchPending } from '../src/notifications/dispatch.js';
+import { narrationFacts, rejectNarration } from '../src/notifications/narrate.js';
 import { buildMessage } from '../src/notifications/slack.js';
 import {
   createChannel,
@@ -626,7 +627,7 @@ describe('saying it exactly once', () => {
     // The date is still corrected: the old day's movement is replaced, not added to.
     assert.equal(pointAt(metric('mrr_movement'), '2024-03-15'), 0);
     assert.equal(pointAt(metric('mrr_movement'), '2024-03-16'), 49.99);
-    const daily = collectDailySnapshot(db, new Date('2024-03-16T18:00:00Z'));
+    const daily = collectDailySnapshot(db, new Date('2024-03-16T18:00:00Z')).snapshot;
     assert.equal(daily.mrr.value, 49.99);
     assert.equal(daily.grossPayments.value, 49.99);
     assert.equal((await dispatchPending(db)).sent, 0);
@@ -723,6 +724,8 @@ describe('daily report', () => {
       grossPayments: { value: 559.94, change: 356.67 },
       trialConversions: { converted: 1, decided: 1 },
       arpu: { value: 141.72, change: -0.88 },
+      baseline: 'posted',
+      mrrWhy: null,
     };
 
     const message = buildDailyReportMessage(snapshot);
@@ -863,6 +866,14 @@ describe('daily report', () => {
     assert.equal(fields[2], '*Active subscriptions*\n3 | ↑ 1');
     assert.equal(fields[3], '*Gross payments*\n$19.99 | ↓ $38.01');
     assert.equal(fields[5], '*ARPU*\n$26.00 | ↓ $3.00');
+    // Nothing was posted the day before, so the baseline says it is a recomputation.
+    assert.equal(
+      (sent[0]!.blocks[2] as { text: { text: string } }).text.text,
+      [
+        '*Why MRR moved* · vs $58.00, yesterday as recomputed today',
+        '• +$19.99 · 1 new paid subscription: s3.example (Plan, +$19.99)',
+      ].join('\n'),
+    );
   });
 
   it('counts trial decisions that occurred on the report day', async () => {
@@ -953,6 +964,167 @@ describe('daily report', () => {
 
     assert.equal((await dispatchPending(db, { now })).sent, 0);
     assert.equal(sent.length, 1);
+  });
+});
+
+/**
+ * Yesterday as posted on March 2 at 18:00 Israel time (16:00 UTC), and then
+ * what Shopify reports afterwards. Shops 3 and 5 changed *before* the post but
+ * were only reported after it — the late data that made a recomputed
+ * yesterday disagree with what the channel had been told.
+ */
+const POSTED_AT = new Date('2024-03-02T16:00:00Z');
+const NEXT_REPORT_AT = new Date('2024-03-03T16:00:00Z');
+
+function seedPostedDay() {
+  return seed([
+    { chargeRef: 'keep', shopId: '1', amount: 29, activatedAt: '2024-02-01T00:00:00Z', firstSaleAt: '2024-02-01T00:00:00Z' },
+    { chargeRef: 'big', shopId: '2', amount: 199, activatedAt: '2024-02-05T00:00:00Z', firstSaleAt: '2024-02-05T00:00:00Z', billingOn: '2024-03-05T00:00:00Z' },
+    // A trial whose billing date has passed counts as paid before any payment settles.
+    { chargeRef: 'trial', shopId: '3', amount: 49, activatedAt: '2024-02-16T00:00:00Z', billingOn: '2024-03-01T00:00:00Z' },
+    { chargeRef: 'late-cancel', shopId: '5', amount: 39, activatedAt: '2024-02-10T00:00:00Z', firstSaleAt: '2024-02-10T00:00:00Z' },
+  ]);
+}
+
+function seedNextDay() {
+  return seed([
+    // Frozen today, before its billing date.
+    { chargeRef: 'big', shopId: '2', amount: 199, activatedAt: '2024-02-05T00:00:00Z', firstSaleAt: '2024-02-05T00:00:00Z', billingOn: '2024-03-05T00:00:00Z', frozenAt: '2024-03-03T10:00:00Z' },
+    // Frozen on Feb 29 — before yesterday's post — but only reported now.
+    { chargeRef: 'trial', shopId: '3', amount: 49, activatedAt: '2024-02-16T00:00:00Z', billingOn: '2024-03-01T00:00:00Z', frozenAt: '2024-02-29T20:00:00Z' },
+    { chargeRef: 'new', shopId: '4', amount: 19.99, activatedAt: '2024-03-03T08:00:00Z', firstSaleAt: '2024-03-03T08:00:00Z' },
+    // Canceled on March 2 at 10:00 UTC, before the post, reported after it.
+    { chargeRef: 'late-cancel', shopId: '5', amount: 39, activatedAt: '2024-02-10T00:00:00Z', firstSaleAt: '2024-02-10T00:00:00Z', churnedAt: '2024-03-02T10:00:00Z' },
+  ]);
+}
+
+function whyText(message: SentMessage): string {
+  return (message.blocks[2] as { text: { text: string } }).text.text;
+}
+
+/** Routes the model call to `reply` and records Slack posts as usual. */
+function stubModel(reply: string): void {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes('openrouter.ai')) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: reply } }] }), { status: 200 });
+    }
+    const body = JSON.parse(String(init?.body ?? '{}')) as { text: string; blocks: unknown[] };
+    sent.push({ url: String(input), text: body.text, blocks: body.blocks });
+    return ok();
+  }) as typeof globalThis.fetch;
+}
+
+describe('why MRR moved', () => {
+  it('measures against the posted report and names every shop behind the change', async () => {
+    const db = seedPostedDay();
+    channelWithTopic(db, '#daily', DAILY_REPORT.key);
+    stubFetch(ok);
+    await dispatchPending(db, { now: POSTED_AT });
+    assert.match(
+      (sent[0]!.blocks[1] as { fields: Array<{ text: string }> }).fields[0]!.text,
+      /^\*MRR\*\n\$316\.00 /,
+    );
+
+    seedNextDay();
+    await dispatchPending(db, { now: NEXT_REPORT_AT });
+
+    // Today 29 + 19.99. Posted yesterday 316; recomputed yesterday would be 228
+    // and would have hidden the two late changes inside a smaller drop.
+    const fields = (sent[1]!.blocks[1] as { fields: Array<{ text: string }> }).fields;
+    assert.equal(fields[0]!.text, '*MRR*\n$48.99 | ↓ $267.01');
+    assert.equal(
+      whyText(sent[1]!),
+      [
+        '*Why MRR moved* · vs $316.00 posted yesterday',
+        '• −$199.00 · 1 charge frozen by Shopify: s2.example (Plan, −$199.00)',
+        '• +$19.99 · 1 new paid subscription: s4.example (Plan, +$19.99)',
+        "_Yesterday's posted figure was corrected by Shopify data that arrived after it was sent:_",
+        '• −$49.00 · 1 charge frozen by Shopify — never paid: s3.example (Plan, −$49.00)',
+        '• −$39.00 · 1 cancellation: s5.example (Plan, −$39.00)',
+      ].join('\n'),
+    );
+  });
+
+  it('cites the dated records behind each cause', async () => {
+    const db = seedPostedDay();
+    channelWithTopic(db, '#daily', DAILY_REPORT.key);
+    stubFetch(ok);
+    await dispatchPending(db, { now: POSTED_AT });
+    seedNextDay();
+    const { attribution } = collectDailySnapshot(db, NEXT_REPORT_AT);
+    const byShop = new Map(attribution.items.map((item) => [item.shop, item]));
+
+    assert.equal(attribution.unexplained, 0);
+    assert.deepEqual(byShop.get('s3.example')!.evidence, [
+      'Shopify froze the charge Feb 29, 22:00',
+      'frozen before its billing date of Mar 1, 2024',
+      'no payment has ever settled on this charge',
+    ]);
+    assert.equal(byShop.get('s3.example')!.restated, true);
+    assert.deepEqual(byShop.get('s2.example')!.evidence, [
+      'Shopify froze the charge Mar 3, 12:00',
+      'frozen before its billing date of Mar 5, 2024',
+      'last payment settled Feb 5, 02:00',
+    ]);
+    assert.equal(byShop.get('s2.example')!.restated, false);
+    assert.deepEqual(byShop.get('s5.example')!.evidence, [
+      'subscription canceled Mar 2, 12:00',
+      'last payment settled Feb 10, 02:00',
+    ]);
+
+    // Charged at activation with no settled sale: counted as paid, and the
+    // cause must not claim a billing date passed.
+    seed([{ chargeRef: 'upfront', shopId: '6', amount: 29, activatedAt: '2024-03-03T09:00:00Z', billingOn: '2024-04-02T09:00:00Z' }]);
+    const upfront = collectDailySnapshot(db, NEXT_REPORT_AT).attribution.items.find((item) => item.shop === 's6.example')!;
+    assert.equal(upfront.cause, 'new_paid');
+    assert.deepEqual(upfront.evidence, [
+      'activated Mar 3, 11:00',
+      'charged at activation (next billing date Apr 2, 2024 is a full cycle away)',
+      'no payment has settled yet',
+    ]);
+  });
+
+  it('puts a checked model sentence above the facts, and drops one that invents', async () => {
+    resetEnvironment({ OPENROUTER_API_KEY: 'test-key' });
+    const db = seedPostedDay();
+    channelWithTopic(db, '#daily', DAILY_REPORT.key);
+    stubFetch(ok);
+    await dispatchPending(db, { now: POSTED_AT });
+    seedNextDay();
+
+    const honest =
+      "MRR fell $267.01: s2.example's $199.00 charge was frozen by Shopify and 1 new paid subscription added $19.99. " +
+      "Late Shopify data also corrected yesterday's figure: a $49.00 charge that never paid was frozen and a $39.00 subscription was canceled.";
+    stubModel(honest);
+    await dispatchPending(db, { now: NEXT_REPORT_AT });
+    assert.equal(whyText(sent[1]!).split('\n')[1], honest);
+
+    // Same day, fresh database state, a reply that invents a cause.
+    const { attribution } = collectDailySnapshot(db, NEXT_REPORT_AT);
+    const facts = narrationFacts(attribution, 'USD');
+    assert.equal(rejectNarration(honest, facts), null);
+    assert.match(rejectNarration('MRR fell $267.01 because 2 stores uninstalled.', facts)!, /uninstall/);
+    assert.match(rejectNarration('MRR fell about $270 on frozen charges.', facts)!, /270/);
+    assert.match(rejectNarration('MRR fell $267.01 after a refund.', facts)!, /refund/);
+    assert.match(rejectNarration('Three stores were frozen, costing $248.00.', facts)!, /248|three/);
+    assert.match(rejectNarration('s9.myshopify.com was frozen.', facts)!, /s9\.myshopify\.com/);
+  });
+
+  it('posts the facts alone when the model reply does not hold up', async () => {
+    resetEnvironment({ OPENROUTER_API_KEY: 'test-key' });
+    const db = seedPostedDay();
+    channelWithTopic(db, '#daily', DAILY_REPORT.key);
+    stubFetch(ok);
+    await dispatchPending(db, { now: POSTED_AT });
+    seedNextDay();
+
+    stubModel('MRR dropped $267.01 because 4 merchants uninstalled after a price increase.');
+    await dispatchPending(db, { now: NEXT_REPORT_AT });
+
+    const lines = whyText(sent[1]!).split('\n');
+    assert.equal(lines[0], '*Why MRR moved* · vs $316.00 posted yesterday');
+    assert.equal(lines[1], '• −$199.00 · 1 charge frozen by Shopify: s2.example (Plan, −$199.00)');
+    assert.equal(whyText(sent[1]!).includes('uninstalled'), false);
   });
 });
 
