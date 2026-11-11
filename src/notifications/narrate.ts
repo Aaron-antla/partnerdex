@@ -21,7 +21,7 @@ const SYSTEM_PROMPT = `You write the one-line "why" under the MRR figure in a Sl
 
 Rules:
 - Use only the JSON facts you are given. Never add a reason, store, plan, amount, date or count that is not in them.
-- Copy every money amount exactly as it appears in the facts, with its sign removed and a $ in front. Never round, add or subtract amounts yourself; when you need a total, use a "total" value from "groups".
+- Copy every money amount exactly as it appears in the facts, with its sign removed, a $ in front, and a comma between thousands (16499.76 is written $16,499.76). Never round, add or subtract amounts yourself; when you need a total, use a "total" value from "groups".
 - Write counts as digits and take them from the "count" values in "groups". Never use number words such as "one" or "two", not even as pronouns; name the shop instead.
 - Refer to a store by its "shop" value, copied exactly. Never write a myshopify.com address.
 - Use the evidence strings to say what happened (for example frozen by Shopify, uninstalled, canceled, new paid subscription, no payment ever settled). Do not speculate beyond them. A "store_closed" cause means the merchant's store was closed or paused, not that they canceled.
